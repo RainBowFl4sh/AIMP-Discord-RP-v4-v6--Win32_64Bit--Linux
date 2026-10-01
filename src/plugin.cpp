@@ -111,7 +111,7 @@ public:
     // IUnknown
     HRESULT WINAPI QueryInterface(REFIID riid, LPVOID* ppv) override {
         if (!ppv) return E_POINTER;
-        if (riid == IID_IUnknown || riid == IID_IAIMPPlugin) {
+        if (riid == IID_IUnknown) {
             *ppv = static_cast<IAIMPPlugin*>(this);
             AddRef();
             return S_OK;

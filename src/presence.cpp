@@ -187,10 +187,10 @@ bool PresenceWorker::BuildActivity(const Config& c, const Snapshot& s, std::stri
 
     // images
     std::string large = (c.coverEnabled && !coverUrl_.empty()) ? coverUrl_ : util::ToUtf8(c.fallbackKey);
-    std::string small = c.showSmallIcon ? util::ToUtf8(playing ? c.playKey : c.pauseKey) : std::string();
+    std::string smallImg = c.showSmallIcon ? util::ToUtf8(playing ? c.playKey : c.pauseKey) : std::string();
     std::string largeText = Field(Expand(c.largeText, v, false));
     std::string smallText = Field(Expand(c.smallText, v, false));
-    if (!large.empty() || !small.empty()) {
+    if (!large.empty() || !smallImg.empty()) {
         std::string as;
         auto add = [&](const char* key, const std::string& val) {
             if (val.empty()) return;
@@ -198,7 +198,7 @@ bool PresenceWorker::BuildActivity(const Config& c, const Snapshot& s, std::stri
             as += std::string("\"") + key + "\":\"" + util::JsonEscape(val) + "\"";
         };
         if (!large.empty()) { add("large_image", large); add("large_text", largeText); }
-        if (!small.empty()) { add("small_image", small); add("small_text", smallText); }
+        if (!smallImg.empty()) { add("small_image", smallImg); add("small_text", smallText); }
         a += ",\"assets\":{" + as + "}";
     }
 
