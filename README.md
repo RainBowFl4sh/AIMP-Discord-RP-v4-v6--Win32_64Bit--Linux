@@ -11,6 +11,19 @@ Discord Rich Presence plugin for AIMP 5 and 6 with its own settings tab inside A
 
 Author: **Fl4sh**
 
+## Preview
+
+How it looks in Discord - while playing (live progress bar) and paused:
+
+<p>
+  <img src="docs/screenshots/discord-playing.png" alt="Discord profile while playing" width="320">
+  <img src="docs/screenshots/discord-paused.png" alt="Discord profile while paused" width="320">
+</p>
+
+In the member list:
+
+<img src="docs/screenshots/discord-member-list.png" alt="Discord member list" width="320">
+
 ## Features
 
 - Track title / artist / album on your Discord profile with Discord's **native progress bar** ("Listening to AIMP")
