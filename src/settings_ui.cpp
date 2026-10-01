@@ -32,6 +32,8 @@ enum Ids {
 };
 
 const UINT_PTR TIMER_STATUS = 1;
+const UINT_PTR TIMER_REPAINT1 = 2, TIMER_REPAINT2 = 3;   // one-shot full repaints after the page was embedded
+const UINT WM_APP_REPAINT = WM_APP + 2;
 const int kPages = 5;
 const wchar_t* kTabNames[kPages] = {L"General", L"Display", L"Cover art", L"Online sources", L"Links"};
 
@@ -96,10 +98,30 @@ INT_PTR CALLBACK SettingsPage::MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             return TRUE;
         case WM_TIMER:
             if (self && w == TIMER_STATUS) self->UpdateStatus();
+            if (w == TIMER_REPAINT1 || w == TIMER_REPAINT2) {
+                KillTimer(h, w);
+                PostMessageW(h, WM_APP_REPAINT, 0, 0);
+            }
+            return TRUE;
+        // AIMP embeds the page with redraw temporarily switched off and afterwards only repaints the
+        // outer window - so the nested controls stayed blank until hovered. Force a full repaint.
+        case WM_SETREDRAW:
+            if (w) PostMessageW(h, WM_APP_REPAINT, 0, 0);
+            return FALSE;
+        case WM_SHOWWINDOW:
+            if (w) PostMessageW(h, WM_APP_REPAINT, 0, 0);
+            return FALSE;
+        case WM_WINDOWPOSCHANGED:
+            if (reinterpret_cast<WINDOWPOS*>(l)->flags & SWP_SHOWWINDOW) PostMessageW(h, WM_APP_REPAINT, 0, 0);
+            return FALSE;
+        case WM_APP_REPAINT:
+            RedrawWindow(h, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
             return TRUE;
         case WM_DESTROY:
             if (self) {
                 KillTimer(h, TIMER_STATUS);
+                KillTimer(h, TIMER_REPAINT1);
+                KillTimer(h, TIMER_REPAINT2);
                 if (self->font_) { DeleteObject(self->font_); self->font_ = nullptr; }
             }
             return FALSE;
@@ -218,6 +240,8 @@ void SettingsPage::BuildUi() {
     Layout();
     ShowPage(0);
     SetTimer(hwnd_, TIMER_STATUS, 1000, nullptr);
+    SetTimer(hwnd_, TIMER_REPAINT1, 150, nullptr);
+    SetTimer(hwnd_, TIMER_REPAINT2, 600, nullptr);
 }
 
 void SettingsPage::Layout() {
@@ -236,7 +260,7 @@ void SettingsPage::ShowPage(int index) {
     // edit boxes otherwise only draw their border after the mouse hovered over them
     if (index >= 0 && index < kPages && pages_[index])
         RedrawWindow(pages_[index], nullptr, nullptr,
-                     RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
+                     RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
 }
 
 void SettingsPage::BuildGeneral(HWND p) {
