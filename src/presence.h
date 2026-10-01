@@ -1,10 +1,9 @@
 // Background worker: owns the Discord connection, builds the activity JSON and resolves covers.
 // The AIMP side only hands over plain-data snapshots, so no AIMP object is ever touched off the main thread.
 #pragma once
-#include <windows.h>
-
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -48,11 +47,14 @@ private:
     void Run();
     bool BuildActivity(const Config& c, const Snapshot& s, std::string& out);
     void SetStatus(bool connected, const std::wstring& user, const std::wstring& msg);
+    void Wake();
+    void WaitForWork(unsigned ms);
 
     std::thread       thread_;
     std::atomic<bool> stop_{false};
     std::atomic<bool> resetCover_{false};
-    HANDLE            wake_ = nullptr;
+    std::condition_variable wakeCv_;   // signalled together with mu_
+    bool              wake_ = false;
 
     std::mutex     mu_;
     Snapshot       snap_;
@@ -68,6 +70,7 @@ private:
     bool          shown_ = false;
     uint64_t      coverTrackId_ = 0;
     std::string   coverUrl_;
+    uint64_t      lastConfigCheck_ = 0;
 };
 
 PresenceWorker& Worker();   // the single instance

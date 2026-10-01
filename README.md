@@ -1,6 +1,13 @@
-# AIMP Discord Rich Presence (x64)
+# AIMP Discord Rich Presence (Windows x86 / x64 + Linux)
 
-Discord Rich Presence plugin for AIMP 5 and 6 (64-bit) with its own settings tab inside AIMP's preferences.
+Discord Rich Presence plugin for AIMP 5 and 6 with its own settings tab inside AIMP's preferences.
+
+| Platform | File |
+|---|---|
+| Windows, AIMP **64-bit** | `aimp_discord_rpc.dll` from `aimp_discord_rpc-windows-x64` |
+| Windows, AIMP **32-bit** | `aimp_discord_rpc.dll` from `aimp_discord_rpc-windows-x86` |
+| Linux, **native** AIMP for Linux (x86_64) | `aimp_discord_rpc.so` from `aimp_discord_rpc-linux-x86_64` |
+| Linux, Windows AIMP running in **Wine** | the Windows DLL matching your AIMP (x86 or x64) - see [Linux](#linux) |
 
 Author: **Fl4sh**
 
@@ -24,13 +31,17 @@ Author: **Fl4sh**
 
 ## Requirements
 
-- AIMP 5 or 6, **64-bit**
-- Discord **desktop app** (the browser version of Discord cannot receive Rich Presence)
+- AIMP 5 or 6: Windows 32-bit or 64-bit, or the native Linux version (x86_64)
+- Discord **desktop app** (the browser version of Discord cannot receive Rich Presence).
+  On Linux the native client, Flatpak, Snap and Vesktop (Flatpak) are found automatically.
 - In Discord: *User Settings -> Activity Privacy -> "Share your detected activities with others"* must be on
 
 ## Install
 
-Download the latest version from the [Releases](../../releases) page. There are three ways to install it:
+Download the latest version from the [Releases](../../releases) page. **Pick the build that matches your AIMP:**
+a 64-bit AIMP only loads the x64 DLL, a 32-bit AIMP only the x86 DLL (*Help -> About* shows which one you have).
+
+There are three ways to install it on Windows:
 
 ### Option 1: AIMP package (easiest)
 
@@ -57,10 +68,49 @@ Make sure the plugin is ticked in *Preferences -> Plugins*. As soon as music is 
 
 **Updating:** simply install the new version the same way - your settings are kept.
 
+## Linux
+
+### Native AIMP for Linux
+
+1. Download `aimp_discord_rpc.so` (x86_64)
+2. Create the folder `aimp_discord_rpc` in AIMP's `Plugins` folder (the folder name must match the file name)
+   and copy `aimp_discord_rpc.so` into it
+3. Restart AIMP and tick the plugin in *Preferences -> Plugins*
+
+The Linux version has no settings tab (AIMP for Linux uses a different UI toolkit). All options are in
+`~/.config/AIMP/DiscordRPC.ini` (or `$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini`), which is created with every option and
+its default value on the first start. Changes to the file are picked up **while AIMP is running** (within ~2 s).
+The keys are the same as on Windows, e.g.:
+
+```ini
+[DiscordRPC]
+details=%title%
+state=by %artist%
+; 0 = show "Paused", 1 = hide while paused
+pausedbehavior=1
+coverenabled=1
+; local covers: 0 = off, 1 = catbox.moe, 2 = Imgur
+uploadhost=1
+```
+
+Comments must be on their own line (`;` or `#`), the file is UTF-8.
+
+Online cover lookup / upload uses the system's `libcurl` (installed on practically every distribution). Without it
+the presence still works, just with the AIMP logo instead of covers. Debug output: start AIMP with
+`AIMP_DISCORD_RPC_DEBUG=1`.
+
+### Windows AIMP in Wine
+
+Install the Windows DLL that matches your AIMP (x86 or x64) into the Wine prefix as described above. There is no
+Discord named pipe inside Wine, so the plugin detects Wine and talks to the **Linux** Discord client's socket
+(`$XDG_RUNTIME_DIR/discord-ipc-N`) directly - no bridge program needed. If you already use a bridge such as
+wine-discord-ipc-bridge, that keeps working as well (the named pipe is tried first).
+
 ## Files
 
-- Settings: `%APPDATA%\AIMP\DiscordRPC.ini`
-- Cover cache: `%APPDATA%\AIMP\DiscordRPC_covers.tsv` (can also be cleared in the *Cover art* tab)
+- Settings: `%APPDATA%\AIMP\DiscordRPC.ini` (Linux: `~/.config/AIMP/DiscordRPC.ini`)
+- Cover cache: `%APPDATA%\AIMP\DiscordRPC_covers.tsv` (Linux: `~/.config/AIMP/DiscordRPC_covers.tsv`; on Windows it
+  can also be cleared in the *Cover art* tab)
 
 ## Cover sources
 
@@ -95,15 +145,36 @@ The application needs the art assets `aimp`, `play` and `pause` (Developer Porta
 Built and tested against the **AIMP SDK 6.00** (C++ headers). The SDK headers are not part of this repository's license.
 
 **GitHub Actions (no Visual Studio needed):** put the C++ headers of the AIMP SDK (`Sources\Cpp`, including `Helpers`)
-into `sdk/`, push, then open *Actions -> Build DLL*. The finished `aimp_discord_rpc.dll` is attached to the run as an artifact.
+into `sdk/`, push, then open *Actions -> Build*. The run builds and attaches `aimp_discord_rpc-windows-x64`,
+`aimp_discord_rpc-windows-x86` and `aimp_discord_rpc-linux-x86_64`, and tests the Linux plugin and both Windows DLLs
+(under Wine) with a mock AIMP host and a fake Discord client (`tests/`).
 
-**Locally:** copy the SDK headers into `sdk/` and run `build.bat` (Visual Studio 2022 with C++ workload + CMake), or:
+**Windows:** copy the SDK headers into `sdk/` and run `build.bat x64` or `build.bat x86` (Visual Studio 2022 with C++
+workload + CMake), or:
 
 ```
-cmake -S . -B build -A x64 -DAIMP_SDK_DIR="C:/path/to/AIMP_SDK/Sources/Cpp"
+cmake -S . -B build -A x64 -DAIMP_SDK_DIR="C:/path/to/AIMP_SDK/Sources/Cpp"     (32-bit: -A Win32)
 cmake --build build --config Release
 ```
 
 Result: `build/Release/aimp_discord_rpc.dll`
+
+**Linux (native plugin):** needs a C++17 compiler, CMake and the headers of libcurl and cairo
+(Debian/Ubuntu: `sudo apt install build-essential cmake libcurl4-openssl-dev libcairo2-dev`):
+
+```
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+tests/run_linux_test.sh build      # optional: cmake --build build --target host_test first
+```
+
+Result: `build/aimp_discord_rpc.so`
+
+**Windows DLLs on Linux (MinGW cross-compile):** `sudo apt install mingw-w64`, then
+
+```
+cmake -S . -B build-win-x86 -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-x86.cmake    (64-bit: cmake/mingw-x64.cmake)
+cmake --build build-win-x86
+```
 
 **Creating the .aimppack:** an `.aimppack` is simply a ZIP archive containing the plugin, renamed from `.zip` to `.aimppack`.

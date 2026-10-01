@@ -1,15 +1,69 @@
-name: Build DLL
-on: [push, workflow_dispatch]
+name: Build
+on: [push, pull_request, workflow_dispatch]
+
 jobs:
-  build:
+  windows:
+    name: Windows ${{ matrix.arch }} (MSVC)
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            cmake_arch: x64
+          - arch: x86
+            cmake_arch: Win32
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -S . -B build -A x64 -DAIMP_SDK_DIR="${{ github.workspace }}/sdk"
+        run: cmake -S . -B build -A ${{ matrix.cmake_arch }} -DAIMP_SDK_DIR="${{ github.workspace }}/sdk"
       - name: Build
         run: cmake --build build --config Release
+      - name: Check export (AIMP looks up the undecorated name, also on x86)
+        run: |
+          pip install pefile
+          python -c "import pefile,sys; pe=pefile.PE('build/Release/aimp_discord_rpc.dll'); n=[e.name.decode() for e in pe.DIRECTORY_ENTRY_EXPORT.symbols]; print(n); sys.exit(0 if 'AIMPPluginGetHeader' in n else 1)"
       - uses: actions/upload-artifact@v4
         with:
-          name: aimp_discord_rpc
+          name: aimp_discord_rpc-windows-${{ matrix.arch }}
           path: build/Release/aimp_discord_rpc.dll
+
+  linux:
+    name: Linux x86_64 (native AIMP for Linux)
+    # oldest supported runner -> low glibc requirement, the .so runs on more distributions
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libcairo2-dev
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target aimp_discord_rpc host_test -j
+      - name: Test (mock AIMP host + fake Discord)
+        run: tests/run_linux_test.sh build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aimp_discord_rpc-linux-x86_64
+          path: build/aimp_discord_rpc.so
+
+  wine:
+    name: Windows DLLs under Wine (x86 + x64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MinGW + Wine
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mingw-w64 wine64 wine32:i386
+      - name: Build (MinGW cross-compile)
+        run: |
+          for arch in x64 x86; do
+            cmake -S . -B build-$arch -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-$arch.cmake -DCMAKE_BUILD_TYPE=Release
+            cmake --build build-$arch --target aimp_discord_rpc host_test -j
+          done
+      - name: Test x64 under Wine
+        run: tests/run_wine_test.sh build-x64
+      - name: Test x86 under Wine
+        run: tests/run_wine_test.sh build-x86

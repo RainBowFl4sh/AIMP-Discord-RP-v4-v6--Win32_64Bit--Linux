@@ -1,4 +1,4 @@
-// Persistent plugin settings (stored in %APPDATA%\AIMP\DiscordRPC.ini).
+// Persistent plugin settings (Windows: %APPDATA%\AIMP\DiscordRPC.ini, Linux: ~/.config/AIMP/DiscordRPC.ini).
 #pragma once
 #include <string>
 
@@ -64,8 +64,9 @@ struct Config {
 };
 
 namespace config {
-std::wstring DataDir();          // %APPDATA%\AIMP
+std::wstring DataDir();          // %APPDATA%\AIMP  or  $XDG_CONFIG_HOME/AIMP
 void   Load();                   // read from disk into memory
+bool   ReloadIfChanged();        // Linux: re-read the file after it was edited by hand (true = reloaded)
 Config Get();                    // thread-safe copy
 void   Set(const Config& c);     // update memory + write to disk
 }  // namespace config

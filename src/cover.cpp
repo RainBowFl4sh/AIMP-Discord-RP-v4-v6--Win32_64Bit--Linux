@@ -1,17 +1,20 @@
 #include "cover.h"
 
+#include <algorithm>
+#ifdef _WIN32
 #include <windows.h>
 #include <objidl.h>
 #include <shlwapi.h>
-
-#include <algorithm>
 using std::min;   // gdiplus.h expects these when NOMINMAX is defined
 using std::max;
 #include <gdiplus.h>
+#endif
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <vector>
@@ -31,7 +34,7 @@ uint32_t SyncSafe(const uint8_t* p) {
 }
 
 bool ReadAt(FILE* f, uint64_t off, size_t len, Bytes& out) {
-    if (_fseeki64(f, (long long)off, SEEK_SET) != 0) return false;
+    if (!util::Seek64(f, off, SEEK_SET)) return false;
     out.resize(len);
     return len == 0 || fread(out.data(), 1, len, f) == len;
 }
@@ -227,8 +230,8 @@ bool FindAtom(FILE* f, uint64_t from, uint64_t to, const char* type, Atom& out) 
 bool ExtractMp4(FILE* f, Bytes& art) {
     Bytes h;
     if (!ReadAt(f, 4, 4, h) || memcmp(h.data(), "ftyp", 4) != 0) return false;
-    if (_fseeki64(f, 0, SEEK_END) != 0) return false;
-    uint64_t fsize = (uint64_t)_ftelli64(f);
+    if (!util::Seek64(f, 0, SEEK_END)) return false;
+    uint64_t fsize = (uint64_t)util::Tell64(f);
 
     Atom moov, udta, meta, ilst, covr;
     if (!FindAtom(f, 0, fsize, "moov", moov)) return false;
@@ -257,7 +260,7 @@ bool ExtractMp4(FILE* f, Bytes& art) {
 
 // Sniffs the container instead of trusting the file extension.
 bool ExtractEmbedded(const std::wstring& path, Bytes& art) {
-    FILE* f = _wfopen(path.c_str(), L"rb");
+    FILE* f = util::OpenFile(path, "rb");
     if (!f) return false;
     Bytes head;
     bool ok = false;
@@ -273,10 +276,10 @@ bool ExtractEmbedded(const std::wstring& path, Bytes& art) {
 // ---------------------------------------------------------------- folder images
 
 bool ReadWholeFile(const std::wstring& path, size_t maxSize, Bytes& out) {
-    FILE* f = _wfopen(path.c_str(), L"rb");
+    FILE* f = util::OpenFile(path, "rb");
     if (!f) return false;
-    _fseeki64(f, 0, SEEK_END);
-    long long size = _ftelli64(f);
+    util::Seek64(f, 0, SEEK_END);
+    long long size = util::Tell64(f);
     bool ok = size > 0 && (unsigned long long)size <= maxSize && ReadAt(f, 0, (size_t)size, out);
     fclose(f);
     return ok;
@@ -289,9 +292,8 @@ bool FindFolderImage(const std::wstring& dir, const std::wstring& names, Bytes& 
         std::wstring name = util::Trim(raw);
         if (name.empty()) continue;
         for (const wchar_t* ext : exts) {
-            std::wstring p = dir + L"\\" + name + L"." + ext;
-            DWORD a = GetFileAttributesW(p.c_str());
-            if (a == INVALID_FILE_ATTRIBUTES || (a & FILE_ATTRIBUTE_DIRECTORY)) continue;
+            std::wstring p = dir + util::kPathSep + name + L"." + ext;
+            if (!util::IsRegularFile(p)) continue;
             if (ReadWholeFile(p, 15u << 20, out) && LooksLikeImage(out)) return true;
         }
     }
@@ -299,6 +301,8 @@ bool FindFolderImage(const std::wstring& dir, const std::wstring& names, Bytes& 
 }
 
 // ---------------------------------------------------------------- GDI+ : square 512x512 JPEG
+
+#ifdef _WIN32
 
 ULONG_PTR  g_gdipToken = 0;
 std::mutex g_gdipMutex;
@@ -375,6 +379,11 @@ Bytes ToJpeg(const Bytes& in, int target) {
     return out;
 }
 
+#else
+// Linux: no resizing - JPEG / PNG covers are uploaded as they are (see Resolve)
+Bytes ToJpeg(const Bytes&, int) { return Bytes(); }
+#endif
+
 // ---------------------------------------------------------------- generic helpers for the online sources
 
 std::string Quoteless(const std::wstring& s) {
@@ -394,7 +403,7 @@ long long JsonNumber(const std::string& json, const std::string& key) {
     if (p == std::string::npos) return -1;
     p = json.find(':', p);
     if (p == std::string::npos) return -1;
-    return _atoi64(json.c_str() + p + 1);
+    return strtoll(json.c_str() + p + 1, nullptr, 10);
 }
 std::string Norm(const std::string& s) {   // lower-case, letters/digits only (UTF-8 bytes kept)
     std::string o;
@@ -468,7 +477,7 @@ Query MakeQuery(const TrackInfo& t) {
 // ---------------------------------------------------------------- upload hosts (local covers)
 
 std::string CatboxUpload(const Bytes& image) {
-    std::string boundary = "----AIMPDiscordRPC" + std::to_string(GetTickCount());
+    std::string boundary = "----AIMPDiscordRPC" + std::to_string(util::TickMs());
     std::string body = Multipart(boundary, {{"reqtype", "fileupload"}}, "fileToUpload", image);
     web::Response r = web::Request(L"POST", L"https://catbox.moe/user/api.php",
                                    {L"Content-Type: multipart/form-data; boundary=" + util::FromUtf8(boundary)}, body);
@@ -481,7 +490,7 @@ std::string CatboxUpload(const Bytes& image) {
 }
 
 std::string ImgurUpload(const Bytes& image, const std::wstring& clientId) {
-    std::string boundary = "----AIMPDiscordRPC" + std::to_string(GetTickCount());
+    std::string boundary = "----AIMPDiscordRPC" + std::to_string(util::TickMs());
     std::string body = Multipart(boundary, {}, "image", image);
     std::vector<std::wstring> headers = {
         L"Authorization: Client-ID " + clientId,
@@ -619,12 +628,12 @@ std::string DiscogsLookup(const Query& q, const std::wstring& token) {
 std::mutex   g_spMu;
 std::string  g_spToken;
 std::wstring g_spFor;
-ULONGLONG    g_spExpires = 0;
+uint64_t     g_spExpires = 0;
 
 std::string SpotifyToken(const std::wstring& id, const std::wstring& secret, bool forceNew) {
     std::lock_guard<std::mutex> lk(g_spMu);
     std::wstring who = id + L":" + secret;
-    if (!forceNew && !g_spToken.empty() && g_spFor == who && GetTickCount64() < g_spExpires) return g_spToken;
+    if (!forceNew && !g_spToken.empty() && g_spFor == who && util::TickMs() < g_spExpires) return g_spToken;
     g_spToken.clear();
     web::Response r = web::Request(L"POST", L"https://accounts.spotify.com/api/token",
                                    {L"Authorization: Basic " + util::FromUtf8(Base64(util::ToUtf8(who))),
@@ -636,7 +645,7 @@ std::string SpotifyToken(const std::wstring& id, const std::wstring& secret, boo
     }
     g_spToken = util::JsonGetString(r.body, "access_token");
     long long sec = JsonNumber(r.body, "expires_in");
-    g_spExpires = GetTickCount64() + (ULONGLONG)((sec > 120 ? sec - 60 : 3000) * 1000);
+    g_spExpires = util::TickMs() + (uint64_t)((sec > 120 ? sec - 60 : 3000) * 1000);
     g_spFor = who;
     return g_spToken;
 }
@@ -687,14 +696,22 @@ std::string KeyOf(const TrackInfo& t) {
 
 // ================================================================== CoverResolver
 
+namespace {
+#ifdef _WIN32
+std::filesystem::path FsPath(const std::wstring& p) { return std::filesystem::path(p); }
+#else
+std::string FsPath(const std::wstring& p) { return util::ToUtf8(p); }
+#endif
+}  // namespace
+
 CoverResolver::CoverResolver() {
-    path_ = config::DataDir() + L"\\DiscordRPC_covers.tsv";
+    path_ = config::DataDir() + util::kPathSep + L"DiscordRPC_covers.tsv";
     LoadCache();
 }
 
 void CoverResolver::LoadCache() {
     std::lock_guard<std::mutex> lk(mu_);
-    std::ifstream in(path_.c_str(), std::ios::binary);
+    std::ifstream in(FsPath(path_), std::ios::binary);
     if (!in) return;
     std::vector<std::pair<std::string, std::string>> lines;
     std::string line;
@@ -708,7 +725,7 @@ void CoverResolver::LoadCache() {
 
     if (lines.size() > 3000) {  // keep the file small: retain the newest 2000 entries
         lines.erase(lines.begin(), lines.end() - 2000);
-        std::ofstream out(path_.c_str(), std::ios::binary | std::ios::trunc);
+        std::ofstream out(FsPath(path_), std::ios::binary | std::ios::trunc);
         for (auto& l : lines) out << l.first << '\t' << l.second << '\n';
     }
     for (auto& l : lines) cache_[l.first] = l.second;
@@ -718,7 +735,7 @@ void CoverResolver::StoreCache(const std::string& key, const std::string& url) {
     std::lock_guard<std::mutex> lk(mu_);
     cache_[key] = url;
     negative_.erase(key);
-    std::ofstream out(path_.c_str(), std::ios::binary | std::ios::app);
+    std::ofstream out(FsPath(path_), std::ios::binary | std::ios::app);
     if (out) out << key << '\t' << url << '\n';
 }
 
@@ -726,7 +743,7 @@ void CoverResolver::ClearCache() {
     std::lock_guard<std::mutex> lk(mu_);
     cache_.clear();
     negative_.clear();
-    DeleteFileW(path_.c_str());
+    util::RemoveFile(path_);
 }
 
 std::string CoverResolver::PeekCache(const TrackInfo& t) {
@@ -744,7 +761,7 @@ std::string CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
         auto it = cache_.find(key);
         if (it != cache_.end()) return it->second;
         auto n = negative_.find(key);
-        if (n != negative_.end() && GetTickCount64() - n->second < 10ull * 60 * 1000) return std::string();
+        if (n != negative_.end() && util::TickMs() - n->second < 10ull * 60 * 1000) return std::string();
     }
 
     std::string url;
@@ -760,10 +777,10 @@ std::string CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
         if (art.empty() && cfg.srcFolder) FindFolderImage(util::DirName(t.fileName), cfg.coverNames, art);
         if (art.empty()) return std::string();
         Bytes upload = ToJpeg(art, 512);
-        if (upload.empty() && IsJpegOrPng(art) && art.size() <= (5u << 20)) upload = art;  // GDI+ failed: raw
+        if (upload.empty() && IsJpegOrPng(art) && art.size() <= (5u << 20)) upload = art;  // GDI+ failed / Linux: raw
         if (upload.empty()) return std::string();
         std::string u = (cfg.uploadHost == 2) ? ImgurUpload(upload, cfg.imgurClientId) : CatboxUpload(upload);
-        if (!u.empty()) util::Log(L"Cover uploaded: %s", util::FromUtf8(u).c_str());
+        if (!u.empty()) util::Log(L"Cover uploaded: %ls", util::FromUtf8(u).c_str());
         return u;
     };
 
@@ -782,7 +799,7 @@ std::string CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
             if (!s.on) continue;
             std::string u = s.fn();
             if (!u.empty() && u.size() <= 256) {
-                util::Log(L"Cover found on %s", s.name);
+                util::Log(L"Cover found on %ls", s.name);
                 return u;
             }
         }
@@ -799,15 +816,17 @@ std::string CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
         StoreCache(key, url);
     } else {
         std::lock_guard<std::mutex> lk(mu_);
-        negative_[key] = GetTickCount64();
+        negative_[key] = util::TickMs();
     }
     return url;
 }
 
 void CoverResolver::ShutdownImaging() {
+#ifdef _WIN32
     std::lock_guard<std::mutex> lk(g_gdipMutex);
     if (g_gdipToken) {
         Gdiplus::GdiplusShutdown(g_gdipToken);
         g_gdipToken = 0;
     }
+#endif
 }
