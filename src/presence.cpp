@@ -338,6 +338,8 @@ void PresenceWorker::Run() {
             dirty_ = false;
             snap = snap_;  // newest data
         }
+        // newest settings as well: they may have been saved while (re)connecting above
+        cfg = config::Get();
 
         // ---- cover: use cache immediately, resolve (network) after the first update went out
         bool needResolve = false;

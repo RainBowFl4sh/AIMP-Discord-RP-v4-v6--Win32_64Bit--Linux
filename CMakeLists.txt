@@ -21,6 +21,7 @@ endif()
 
 add_library(aimp_discord_rpc SHARED
     src/plugin.cpp
+    src/settings_ui.cpp
     src/presence.cpp
     src/discord_ipc.cpp
     src/cover.cpp
@@ -38,11 +39,10 @@ set_target_properties(aimp_discord_rpc PROPERTIES PREFIX "" OUTPUT_NAME "aimp_di
 
 if(WIN32)
     target_sources(aimp_discord_rpc PRIVATE
-        src/settings_ui.cpp
         src/aimp_discord_rpc.def)   # undecorated export name, also for 32-bit (stdcall)
     target_compile_definitions(aimp_discord_rpc PRIVATE UNICODE _UNICODE NOMINMAX _CRT_SECURE_NO_WARNINGS)
     target_link_libraries(aimp_discord_rpc PRIVATE
-        winhttp gdiplus shlwapi shell32 comctl32 uxtheme ole32 user32 gdi32)
+        winhttp gdiplus shlwapi ole32 user32 gdi32)
     if(MINGW)
         # the SDK maps _ctoll to the non-existing wtoll for non-MSVC compilers
         target_compile_definitions(aimp_discord_rpc PRIVATE wtoll=_wtoll)

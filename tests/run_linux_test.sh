@@ -35,12 +35,14 @@ acts = [f["data"]["args"] for f in frames if f["op"] == 1 and f["data"].get("cmd
 shown = [a["activity"] for a in acts if "activity" in a]
 assert shown, "presence was never set"
 a = shown[0]
-assert a["details"] == "Bohemian Rhapsody – Remastered", a
+# details line as changed on the settings page by host_test ("%title% [test]")
+assert a["details"] == "Bohemian Rhapsody – Remastered [test]", a
 assert a["state"] == "by Queen", a
 assert a["timestamps"]["end"] - a["timestamps"]["start"] == 354, a
 assert a["assets"]["large_image"] == "aimp" and a["assets"]["small_image"] == "play", a
 assert "activity" not in acts[-1], "presence not cleared on pause / exit"
 ini = open(sys.argv[2]).read()
 assert "coverenabled=0" in ini and "configversion=4" in ini, ini
+assert "details=%title% [test]" in ini, ini
 print("OK: %d frames, presence set and cleared, settings file complete" % len(frames))
 EOF

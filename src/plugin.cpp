@@ -1,16 +1,17 @@
 // AIMP SDK glue: plugin entry point, options-dialog frame and player polling.
-// This is the ONLY file that includes AIMP SDK headers. If your SDK revision names something differently,
-// the fix is local to this file (see README -> "SDK notes").
+// AIMP SDK headers are only used here and in settings_ui.cpp (via aimp_util.h).
 //
-// Windows (AIMP x86 / x64): settings tab in AIMP's preferences, polling by a timer on the main thread.
+// Settings tab: built with AIMP's own UI API (settings_ui.cpp), identical on Windows and Linux.
+// Windows (AIMP x86 / x64): polling by a timer on the main thread.
 // Linux (native AIMP for Linux, x86_64): the SDK uses UTF-8 strings there; polling is driven by AIMP's own
-// player events (message hook, main thread); settings live in ~/.config/AIMP/DiscordRPC.ini.
+// player events (message hook, main thread). Settings are stored in ~/.config/AIMP/DiscordRPC.ini.
 
 #ifdef _WIN32
 #define INITGUID            // define the SDK's IID_* GUIDs in this translation unit
 #include <windows.h>
 #endif
 
+#include "aimp_util.h"
 #include "apiCore.h"
 #include "apiFileManager.h"
 #include "apiMessages.h"
@@ -29,9 +30,7 @@
 #include "config.h"
 #include "cover.h"
 #include "presence.h"
-#ifdef _WIN32
 #include "settings_ui.h"
-#endif
 #include "track.h"
 #include "util.h"
 
@@ -39,71 +38,28 @@
 HINSTANCE g_hModule = nullptr;
 #endif
 
-#ifndef _WIN32
-#define FAILED(hr)    Failed(hr)
-#define SUCCEEDED(hr) Succeeded(hr)
-#endif
-
 namespace {
 
-// IAIMPString / PChar text: UTF-16 on Windows, UTF-8 on Linux
-#ifdef _WIN32
-#define AIMP_TEXT(s) L##s
-std::wstring FromAimp(const TChar* d, int n) { return std::wstring(d, (size_t)n); }
-#else
-#define AIMP_TEXT(s) s
-std::wstring FromAimp(const TChar* d, int n) { return util::FromUtf8(std::string(d, (size_t)n)); }
-#endif
+using aimp::ComPtr;
+using aimp::PropString;
+using aimp::SameIID;
 
 const TChar* const kPluginName = AIMP_TEXT("Discord Rich Presence");
 
-bool SameIID(REFIID a, REFIID b) { return memcmp(&a, &b, sizeof(GUID)) == 0; }
 const int kPlayerStopped = 0, kPlayerPaused = 1, kPlayerPlaying = 2;   // AIMP_MSG_PROPERTY_PLAYER_STATE values
-
-// ---- minimal COM smart pointer ------------------------------------------------------------------------
-template <class T>
-class ComPtr {
-public:
-    ComPtr() = default;
-    ComPtr(const ComPtr&) = delete;
-    ComPtr& operator=(const ComPtr&) = delete;
-    ~ComPtr() { reset(); }
-    void reset() { if (p_) { p_->Release(); p_ = nullptr; } }
-    T** put() { reset(); return &p_; }
-    void** putVoid() { reset(); return reinterpret_cast<void**>(&p_); }
-    T* get() const { return p_; }
-    T* operator->() const { return p_; }
-    explicit operator bool() const { return p_ != nullptr; }
-private:
-    T* p_ = nullptr;
-};
-
-std::wstring StringOf(IAIMPString* s) {
-    if (!s) return std::wstring();
-    PChar d = s->GetData();
-    int n = s->GetLength();
-    return (d && n > 0) ? FromAimp(d, n) : std::wstring();
-}
-
-std::wstring PropString(IAIMPPropertyList* pl, int id) {
-    ComPtr<IAIMPString> s;
-    if (SUCCEEDED(pl->GetValueAsObject(id, IID_IAIMPString, s.putVoid())) && s) return StringOf(s.get());
-    return std::wstring();
-}
 
 class Plugin;
 Plugin* g_plugin = nullptr;
 
-#ifdef _WIN32
 // ---- options dialog frame -----------------------------------------------------------------------------
 class OptionsFrame final : public IAIMPOptionsDialogFrame {
 public:
     explicit OptionsFrame(Plugin* owner) : owner_(owner) {}
 
     // IUnknown
-    HRESULT WINAPI QueryInterface(REFIID riid, LPVOID* ppv) override {
+    HRESULT __unknwncall QueryInterface(REFIID riid, LPVOID* ppv) override {
         if (!ppv) return E_POINTER;
-        if (riid == IID_IUnknown || riid == IID_IAIMPOptionsDialogFrame) {
+        if (SameIID(riid, IID_IUnknown) || SameIID(riid, IID_IAIMPOptionsDialogFrame)) {
             *ppv = static_cast<IAIMPOptionsDialogFrame*>(this);
             AddRef();
             return S_OK;
@@ -111,9 +67,9 @@ public:
         *ppv = nullptr;
         return E_NOINTERFACE;
     }
-    ULONG WINAPI AddRef() override { return (ULONG)InterlockedIncrement(&ref_); }
-    ULONG WINAPI Release() override {
-        ULONG r = (ULONG)InterlockedDecrement(&ref_);
+    DWORD __unknwncall AddRef() override { return (DWORD)++ref_; }
+    DWORD __unknwncall Release() override {
+        DWORD r = (DWORD)--ref_;
         if (r == 0) delete this;
         return r;
     }
@@ -125,14 +81,16 @@ public:
     void WINAPI Notification(INT32 id) override;
 
     void SetService(IAIMPServiceOptionsDialog* svc) { service_ = svc; }
+    void UpdateStatus() { if (page_) page_->UpdateStatus(); }
 
 private:
     Plugin* owner_;
     SettingsPage* page_ = nullptr;
     IAIMPServiceOptionsDialog* service_ = nullptr;   // not owned
-    volatile LONG ref_ = 1;
+    std::atomic<long> ref_{1};
 };
-#else
+
+#ifndef _WIN32
 // ---- player events (Linux): AIMP calls this on its main thread ---------------------------------------
 class EventHook final : public IAIMPMessageHook {
 public:
@@ -216,9 +174,9 @@ private:
     IAIMPCore* core_ = nullptr;
     ComPtr<IAIMPServicePlayer> player_;
     ComPtr<IAIMPServiceMessageDispatcher> dispatcher_;
-#ifdef _WIN32
     ComPtr<IAIMPServiceOptionsDialog> options_;
     OptionsFrame* frame_ = nullptr;
+#ifdef _WIN32
     HWND timerWnd_ = nullptr;
 #else
     EventHook* hook_ = nullptr;
@@ -234,23 +192,19 @@ private:
 };
 
 // ------------------------------------------------------------------------------------------------ frame impl
-#ifdef _WIN32
 
 HRESULT WINAPI OptionsFrame::GetName(IAIMPString** S) {
-    IAIMPCore* core = owner_->Core();
-    if (!core || !S) return E_FAIL;
-    IAIMPString* str = nullptr;
-    if (FAILED(core->CreateObject(IID_IAIMPString, reinterpret_cast<void**>(&str))) || !str) return E_FAIL;
-    str->SetData(const_cast<PChar>(kPluginName), (int)wcslen(kPluginName));
-    *S = str;
-    return S_OK;
+    if (!S) return E_POINTER;
+    *S = aimp::MakeString(owner_->Core(), L"Discord Rich Presence");
+    return *S ? S_OK : E_FAIL;
 }
 
 HWND WINAPI OptionsFrame::CreateFrame(HWND parent) {
-    page_ = SettingsPage::Create(parent, [this]() {
+    if (page_) DestroyFrame();
+    page_ = SettingsPage::Create(owner_->Core(), parent, [this]() {
         if (service_) service_->FrameModified(this);   // enables AIMP's "Apply" button
     });
-    return page_ ? page_->Hwnd() : nullptr;
+    return page_ ? page_->Hwnd() : (HWND)0;
 }
 
 void WINAPI OptionsFrame::DestroyFrame() {
@@ -282,7 +236,8 @@ void WINAPI OptionsFrame::Notification(INT32 id) {
             break;
     }
 }
-#else
+
+#ifndef _WIN32
 void WINAPI EventHook::CoreMessage(DWORD message, INT32, void*, HRESULT*) {
     if (!owner_) return;
     switch (message) {
@@ -315,13 +270,13 @@ HRESULT WINAPI Plugin::Initialize(IAIMPCore* core) {
     config::Load();
     Worker().Start();
 
-#ifdef _WIN32
-    // settings tab inside AIMP's options dialog
+    // settings tab inside AIMP's options dialog (Windows and Linux)
     frame_ = new OptionsFrame(this);
     if (SUCCEEDED(core_->QueryInterface(IID_IAIMPServiceOptionsDialog, options_.putVoid())) && options_)
         frame_->SetService(options_.get());
     core_->RegisterExtension(IID_IAIMPServiceOptionsDialog, frame_);
 
+#ifdef _WIN32
     // hidden message-only window: its WM_TIMER runs on AIMP's main thread, so all SDK calls stay there
     WNDCLASSW wc = {};
     wc.lpfnWndProc = &Plugin::TimerWndProc;
@@ -352,13 +307,6 @@ HRESULT WINAPI Plugin::Finalize() {
         timerWnd_ = nullptr;
     }
     UnregisterClassW(L"AIMPDiscordRPCTimerWindow", g_hModule);
-
-    if (core_ && frame_) {
-        core_->UnregisterExtension(frame_);
-        frame_->SetService(nullptr);
-        frame_->Release();
-        frame_ = nullptr;
-    }
 #else
     if (hook_) {
         hook_->Detach();
@@ -367,12 +315,17 @@ HRESULT WINAPI Plugin::Finalize() {
         hook_ = nullptr;
     }
 #endif
+    if (core_ && frame_) {
+        core_->UnregisterExtension(frame_);
+        frame_->DestroyFrame();
+        frame_->SetService(nullptr);
+        frame_->Release();
+        frame_ = nullptr;
+    }
     Worker().Stop();               // clears the presence and joins the thread
     CoverResolver::ShutdownImaging();
 
-#ifdef _WIN32
     options_.reset();
-#endif
     player_.reset();
     dispatcher_.reset();
     if (core_) {
@@ -454,6 +407,7 @@ bool Plugin::ReadTrack(TrackInfo& t, double& duration) {
 void Plugin::Poll() {
     using namespace std::chrono;
     const auto now = steady_clock::now();
+    if (frame_) frame_->UpdateStatus();   // connection status line on the settings page (if open)
 
     int st = ReadState();
     PlayState ps = (st == kPlayerPlaying) ? PlayState::Playing : (st == kPlayerPaused ? PlayState::Paused : PlayState::Stopped);

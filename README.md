@@ -1,9 +1,11 @@
-# AIMP Discord Rich Presence (Windows x86 / x64 + Linux)
+# AIMP Discord Rich Presence 1.4.1 (Windows x86 / x64 + Linux)
 
-Discord Rich Presence plugin for AIMP 5 and 6 with its own settings tab inside AIMP's preferences.
+Discord Rich Presence plugin for AIMP 5 and 6 with its own settings tab inside AIMP's preferences -
+on Windows **and** Linux. See [CHANGELOG.md](CHANGELOG.md) for what is new.
 
 | Platform | File |
 |---|---|
+| **All platforms in one package** | `aimp_discord_rpc.aimppack` - AIMP picks the right build |
 | Windows, AIMP **64-bit** | `aimp_discord_rpc.dll` from `aimp_discord_rpc-windows-x64` |
 | Windows, AIMP **32-bit** | `aimp_discord_rpc.dll` from `aimp_discord_rpc-windows-x86` |
 | Linux, **native** AIMP for Linux (x86_64) | `aimp_discord_rpc.so` from `aimp_discord_rpc-linux-x86_64` |
@@ -35,7 +37,8 @@ In the member list:
 - Clickable song title: opens a YouTube search for artist + title (own link optional)
 - PreMiD friendly: while AIMP is paused its presence is hidden, so your browser activity (PreMiD) is shown instead
 - Works out of the box - no Discord application or key needed
-- Own settings tab: *Preferences -> Plugins -> Discord Rich Presence* (General / Display / Cover art / Online sources / Links)
+- Own settings tab: *Preferences -> Plugins -> Discord Rich Presence* (General / Display / Cover art / Online sources / Links),
+  built with AIMP's own UI - follows the AIMP skin (light / dark) and is the same on Windows and Linux
 - Text templates with placeholders: `%artist% %title% %album% %albumartist% %genre% %year% %track% %filename% %ext% %pos% %dur% %percent% %bar% %status%`
 - Play/pause small icon, paused behaviour (show "Paused" / hide / hide after N minutes)
 - Internet radio: shows the current song of the stream; can also be hidden completely
@@ -51,15 +54,17 @@ In the member list:
 
 ## Install
 
-Download the latest version from the [Releases](../../releases) page. **Pick the build that matches your AIMP:**
-a 64-bit AIMP only loads the x64 DLL, a 32-bit AIMP only the x86 DLL (*Help -> About* shows which one you have).
+Download the latest version from the [Releases](../../releases) page. The `.aimppack` contains the builds for
+Windows 32-bit, Windows 64-bit and Linux - AIMP installs the one it needs. If you install a single DLL instead,
+**pick the one that matches your AIMP**: a 64-bit AIMP only loads the x64 DLL, a 32-bit AIMP only the x86 DLL
+(*Help -> About* shows which one you have).
 
 There are three ways to install it on Windows:
 
 ### Option 1: AIMP package (easiest)
 
 1. Download `aimp_discord_rpc.aimppack`
-2. **Double-click** the file - AIMP opens and installs the plugin automatically
+2. **Double-click** the file - AIMP opens and installs the plugin automatically (32-bit or 64-bit is picked for you)
 3. Restart AIMP if it asks you to
 
 ### Option 2: Install button in AIMP
@@ -83,8 +88,9 @@ Make sure the plugin is ticked in *Preferences -> Plugins*. As soon as music is 
 
 ## Settings
 
-All options are in AIMP under *Preferences -> Plugins -> Discord Rich Presence* (Windows; on Linux see
-[Native AIMP for Linux](#native-aimp-for-linux) - same options, in an INI file).
+All options are in AIMP under *Preferences -> Plugins -> Discord Rich Presence* - on Windows and Linux. Since 1.4 the
+page is built with AIMP's own UI controls, so it follows the current AIMP skin. Links (Developer Portal, Spotify,
+Discogs) are opened by AIMP in your browser.
 
 **General** - on/off, activity type (Listening with progress bar / Playing), what the Discord status shows, paused
 behaviour, hiding streams or paths, live connection status, own Discord application (advanced)
@@ -116,10 +122,10 @@ behaviour, hiding streams or paths, live connection status, own Discord applicat
    and copy `aimp_discord_rpc.so` into it
 3. Restart AIMP and tick the plugin in *Preferences -> Plugins*
 
-The Linux version has no settings tab (AIMP for Linux uses a different UI toolkit). All options are in
-`~/.config/AIMP/DiscordRPC.ini` (or `$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini`), which is created with every option and
-its default value on the first start. Changes to the file are picked up **while AIMP is running** (within ~2 s).
-The keys are the same as on Windows, e.g.:
+The settings tab is the same as on Windows (*Preferences -> Plugins -> Discord Rich Presence*).
+The options are stored in `~/.config/AIMP/DiscordRPC.ini` (or `$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini`), which is
+created with every option on the first start. You can also edit this file by hand - changes are picked up
+**while AIMP is running** (within ~2 s). The keys are the same as on Windows, e.g.:
 
 ```ini
 [DiscordRPC]
@@ -148,8 +154,8 @@ wine-discord-ipc-bridge, that keeps working as well (the named pipe is tried fir
 ## Files
 
 - Settings: `%APPDATA%\AIMP\DiscordRPC.ini` (Linux: `~/.config/AIMP/DiscordRPC.ini`)
-- Cover cache: `%APPDATA%\AIMP\DiscordRPC_covers.tsv` (Linux: `~/.config/AIMP/DiscordRPC_covers.tsv`; on Windows it
-  can also be cleared in the *Cover art* tab)
+- Cover cache: `%APPDATA%\AIMP\DiscordRPC_covers.tsv` (Linux: `~/.config/AIMP/DiscordRPC_covers.tsv`); can also be
+  cleared in the *Cover art* tab
 
 ## Cover sources
 
@@ -185,8 +191,9 @@ Built and tested against the **AIMP SDK 6.00** (C++ headers). The SDK headers ar
 
 **GitHub Actions (no Visual Studio needed):** put the C++ headers of the AIMP SDK (`Sources\Cpp`, including `Helpers`)
 into `sdk/`, push, then open *Actions -> Build*. The run builds and attaches `aimp_discord_rpc-windows-x64`,
-`aimp_discord_rpc-windows-x86` and `aimp_discord_rpc-linux-x86_64`, and tests the Linux plugin and both Windows DLLs
-(under Wine) with a mock AIMP host and a fake Discord client (`tests/`).
+`aimp_discord_rpc-windows-x86`, `aimp_discord_rpc-linux-x86_64` and the ready-to-release `aimp_discord_rpc.aimppack`.
+It also tests the Linux plugin and both Windows DLLs (under Wine) with a mock AIMP host - including the settings
+page through a mock of AIMP's UI service - and a fake Discord client (`tests/`).
 
 **Windows:** copy the SDK headers into `sdk/` and run `build.bat x64` or `build.bat x86` (Visual Studio 2022 with C++
 workload + CMake), or:
@@ -216,4 +223,11 @@ cmake -S . -B build-win-x86 -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-x86.cmake    (64-
 cmake --build build-win-x86
 ```
 
-**Creating the .aimppack:** an `.aimppack` is simply a ZIP archive containing the plugin, renamed from `.zip` to `.aimppack`.
+**Creating the .aimppack:** an `.aimppack` is a ZIP archive. `tools/make_aimppack.py` builds it with all platforms:
+
+```
+python3 tools/make_aimppack.py --x86 <x86 dll> --x64 <x64 dll> --linux <so> --out aimp_discord_rpc.aimppack
+```
+
+Layout: the x86 DLL in `aimp_discord_rpc/`, the x64 DLL in `aimp_discord_rpc/x64/`, the Linux `.so` in both folders
+and `aimp_discord_rpc.txt` with name / version / author.

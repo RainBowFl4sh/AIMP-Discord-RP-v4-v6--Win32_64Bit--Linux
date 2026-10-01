@@ -33,8 +33,10 @@ for _ in $(seq 50); do [ -S "$XDG_RUNTIME_DIR/discord-ipc-0" ] && break; sleep 0
 cp "$BUILD/aimp_discord_rpc.dll" "$BUILD/host_test.exe" "$TMP/"
 (cd "$TMP" && wine host_test.exe aimp_discord_rpc.dll)
 
-python3 - "$TMP/frames.log" <<'EOF'
+python3 - "$TMP/frames.log" "$APPDATA_DIR/AIMP/DiscordRPC.ini" <<'EOF'
 import json, sys
+ini = open(sys.argv[2], encoding="latin-1").read()
+assert "Details=%title% [test]" in ini, ini
 frames = [json.loads(l) for l in open(sys.argv[1])]
 for f in frames:
     print("frame:", json.dumps(f, ensure_ascii=False))
@@ -43,7 +45,8 @@ acts = [f["data"]["args"] for f in frames if f["op"] == 1 and f["data"].get("cmd
 shown = [a["activity"] for a in acts if "activity" in a]
 assert shown, "presence was never set"
 a = shown[0]
-assert a["details"] == "Bohemian Rhapsody – Remastered", a
+# details line as changed on the settings page by host_test ("%title% [test]")
+assert a["details"] == "Bohemian Rhapsody – Remastered [test]", a
 assert a["state"] == "by Queen", a
 assert a["timestamps"]["end"] - a["timestamps"]["start"] == 354, a
 assert "activity" not in acts[-1], "presence not cleared on pause / exit"
