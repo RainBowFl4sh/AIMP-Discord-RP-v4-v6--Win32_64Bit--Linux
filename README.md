@@ -1,6 +1,6 @@
 # AIMP Discord Rich Presence (x64)
 
-Discord Rich Presence plugin for AIMP 5 (64-bit) with its own settings tab inside AIMP's options dialog.
+Discord Rich Presence plugin for AIMP 5 and 6 (64-bit) with its own settings tab inside AIMP's options dialog.
 
 ## Features
 
@@ -9,12 +9,13 @@ Discord Rich Presence plugin for AIMP 5 (64-bit) with its own settings tab insid
   - the file's own cover (tags MP3 / FLAC / M4A or folder image) is uploaded to **catbox.moe** (no account / key needed) or Imgur (Client-ID)
   - online lookup without upload: **Spotify** (free developer app), **Deezer**, **Apple Music / iTunes**, **Bandcamp**, **Discogs** (free token), **MusicBrainz + Cover Art Archive**
   - artist check against every hit to avoid wrong covers; covers are cached on disk
-- Fallback asset key if no cover is found
-- Own settings tab: *Options -> Plugins -> Discord Rich Presence* (General / Display / Cover art / Buttons)
+- AIMP logo as fallback if no cover is found
+- Own settings tab: *Options -> Plugins -> Discord Rich Presence* (General / Display / Cover art / Online sources / Links)
 - Text templates with placeholders: `%artist% %title% %album% %albumartist% %genre% %year% %track% %filename% %ext% %pos% %dur% %percent% %bar% %status%`
 - Optional text progress bar (`%bar%`) for the "Playing" activity type
 - Play/pause small icon, paused behaviour (show / clear / clear after N minutes)
-- Up to 2 buttons (URL placeholders are URL-encoded)
+- Clickable song title: opens a YouTube search for artist + title (own link optional)
+- Works out of the box - no Discord application or key needed
 - Hide for streams or for paths containing given text
 - Auto reconnect when Discord starts later, live connection status, presence is cleared when AIMP closes
 - UI is English only
@@ -40,20 +41,20 @@ Result: `build/Release/aimp_discord_rpc.dll`
 
 1. Copy the DLL to `AIMP\Plugins\DiscordRPC\aimp_discord_rpc.dll`
 2. AIMP -> Options -> Plugins -> enable it
-3. Create an application at https://discord.com/developers/applications (its name is shown as "Listening to <name>"), copy the **Application ID**
-4. AIMP -> Options -> *Discord Rich Presence* -> General -> paste the Application ID -> OK
-5. Optional: upload art assets in the Developer Portal (Rich Presence -> Art Assets), e.g. `aimp` (fallback logo), `play`, `pause`
+3. Done - Discord shows "Listening to AIMP" while music is playing.
+
+Advanced (optional): to use your own Discord application, tick *General -> Advanced: use my own Discord application*
+and enter its Application ID. It needs the art assets `aimp`, `play` and `pause` (Rich Presence -> Art Assets).
 
 Settings file: `%APPDATA%\AIMP\DiscordRPC.ini`, cover cache: `%APPDATA%\AIMP\DiscordRPC_covers.tsv`
 
 ## Notes
 
-- **Imgur**: needs your own free Client-ID (api.imgur.com). Uploaded covers are public links. Opt-in only.
+- **catbox.moe / Imgur**: uploaded covers are public links. Imgur needs your own free Client-ID; upload can be turned off.
 - **Deezer**: matches by artist + album / title, so wrong or missing covers are possible for obscure releases.
-- Buttons are never visible on your own profile (Discord behaviour) - check with a second account.
 - Discord limits updates, so changes are coalesced (max. one update per 2 s).
-- Cover sources "tags" and "folder" are only used for the Imgur upload, because Discord cannot read local files.
-- Not supported for embedded covers: Ogg/Opus, WMA, APE (folder image / Deezer still work).
+- Cover sources "tags" and "folder" are only used for the upload (catbox.moe / Imgur), because Discord cannot read local files.
+- Not supported for embedded covers: Ogg/Opus, WMA, APE (folder image / online lookup still work).
 
 ## SDK notes (this code was written without compiling against the SDK!)
 
