@@ -4,8 +4,7 @@
 //   -> (caller falls back to a Discord asset key)
 // Results are cached on disk, so every cover is uploaded / looked up only once.
 #pragma once
-#include <windows.h>
-
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <string>
@@ -30,5 +29,5 @@ private:
     std::mutex                          mu_;
     std::wstring                        path_;
     std::map<std::string, std::string>  cache_;
-    std::map<std::string, ULONGLONG>    negative_;   // failed lookups -> retry after 10 minutes
+    std::map<std::string, uint64_t>     negative_;   // failed lookups -> retry after 10 minutes
 };

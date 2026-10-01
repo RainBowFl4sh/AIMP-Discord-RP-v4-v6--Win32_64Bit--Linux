@@ -1,9 +1,15 @@
 // AIMP SDK glue: plugin entry point, options-dialog frame and player polling.
 // This is the ONLY file that includes AIMP SDK headers. If your SDK revision names something differently,
 // the fix is local to this file (see README -> "SDK notes").
+//
+// Windows (AIMP x86 / x64): settings tab in AIMP's preferences, polling by a timer on the main thread.
+// Linux (native AIMP for Linux, x86_64): the SDK uses UTF-8 strings there; polling is driven by AIMP's own
+// player events (message hook, main thread); settings live in ~/.config/AIMP/DiscordRPC.ini.
 
+#ifdef _WIN32
 #define INITGUID            // define the SDK's IID_* GUIDs in this translation unit
 #include <windows.h>
+#endif
 
 #include "apiCore.h"
 #include "apiFileManager.h"
@@ -14,6 +20,7 @@
 #include "apiPlaylists.h"
 #include "apiPlugin.h"
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -22,15 +29,35 @@
 #include "config.h"
 #include "cover.h"
 #include "presence.h"
+#ifdef _WIN32
 #include "settings_ui.h"
+#endif
 #include "track.h"
 #include "util.h"
 
+#ifdef _WIN32
 HINSTANCE g_hModule = nullptr;
+#endif
+
+#ifndef _WIN32
+#define FAILED(hr)    Failed(hr)
+#define SUCCEEDED(hr) Succeeded(hr)
+#endif
 
 namespace {
 
-const wchar_t* kPluginName = L"Discord Rich Presence";
+// IAIMPString / PChar text: UTF-16 on Windows, UTF-8 on Linux
+#ifdef _WIN32
+#define AIMP_TEXT(s) L##s
+std::wstring FromAimp(const TChar* d, int n) { return std::wstring(d, (size_t)n); }
+#else
+#define AIMP_TEXT(s) s
+std::wstring FromAimp(const TChar* d, int n) { return util::FromUtf8(std::string(d, (size_t)n)); }
+#endif
+
+const TChar* const kPluginName = AIMP_TEXT("Discord Rich Presence");
+
+bool SameIID(REFIID a, REFIID b) { return memcmp(&a, &b, sizeof(GUID)) == 0; }
 const int kPlayerStopped = 0, kPlayerPaused = 1, kPlayerPlaying = 2;   // AIMP_MSG_PROPERTY_PLAYER_STATE values
 
 // ---- minimal COM smart pointer ------------------------------------------------------------------------
@@ -53,9 +80,9 @@ private:
 
 std::wstring StringOf(IAIMPString* s) {
     if (!s) return std::wstring();
-    PWCHAR d = s->GetData();
+    PChar d = s->GetData();
     int n = s->GetLength();
-    return (d && n > 0) ? std::wstring(d, (size_t)n) : std::wstring();
+    return (d && n > 0) ? FromAimp(d, n) : std::wstring();
 }
 
 std::wstring PropString(IAIMPPropertyList* pl, int id) {
@@ -67,8 +94,9 @@ std::wstring PropString(IAIMPPropertyList* pl, int id) {
 class Plugin;
 Plugin* g_plugin = nullptr;
 
+#ifdef _WIN32
 // ---- options dialog frame -----------------------------------------------------------------------------
-class OptionsFrame : public IAIMPOptionsDialogFrame {
+class OptionsFrame final : public IAIMPOptionsDialogFrame {
 public:
     explicit OptionsFrame(Plugin* owner) : owner_(owner) {}
 
@@ -104,14 +132,46 @@ private:
     IAIMPServiceOptionsDialog* service_ = nullptr;   // not owned
     volatile LONG ref_ = 1;
 };
+#else
+// ---- player events (Linux): AIMP calls this on its main thread ---------------------------------------
+class EventHook final : public IAIMPMessageHook {
+public:
+    explicit EventHook(Plugin* owner) : owner_(owner) {}
+
+    HRESULT __unknwncall QueryInterface(REFIID riid, LPVOID* ppv) override {
+        if (!ppv) return E_POINTER;
+        if (SameIID(riid, IID_IUnknown) || SameIID(riid, IID_IAIMPMessageHook)) {
+            *ppv = static_cast<IAIMPMessageHook*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    DWORD __unknwncall AddRef() override { return (DWORD)++ref_; }
+    DWORD __unknwncall Release() override {
+        DWORD r = (DWORD)--ref_;
+        if (r == 0) delete this;
+        return r;
+    }
+
+    void WINAPI CoreMessage(DWORD message, INT32 param1, void* param2, HRESULT* result) override;
+
+    void Detach() { owner_ = nullptr; }
+
+private:
+    Plugin* owner_;
+    std::atomic<long> ref_{1};
+};
+#endif
 
 // ---- the plugin ---------------------------------------------------------------------------------------
-class Plugin : public IAIMPPlugin {
+class Plugin final : public IAIMPPlugin {
 public:
     // IUnknown
-    HRESULT WINAPI QueryInterface(REFIID riid, LPVOID* ppv) override {
+    HRESULT __unknwncall QueryInterface(REFIID riid, LPVOID* ppv) override {
         if (!ppv) return E_POINTER;
-        if (riid == IID_IUnknown) {
+        if (SameIID(riid, IID_IUnknown)) {
             *ppv = static_cast<IAIMPPlugin*>(this);
             AddRef();
             return S_OK;
@@ -119,26 +179,26 @@ public:
         *ppv = nullptr;
         return E_NOINTERFACE;
     }
-    ULONG WINAPI AddRef() override { return (ULONG)InterlockedIncrement(&ref_); }
-    ULONG WINAPI Release() override {
-        ULONG r = (ULONG)InterlockedDecrement(&ref_);
+    DWORD __unknwncall AddRef() override { return (DWORD)++ref_; }
+    DWORD __unknwncall Release() override {
+        DWORD r = (DWORD)--ref_;
         if (r == 0) delete this;
         return r;
     }
 
     // IAIMPPlugin
-    PWCHAR WINAPI InfoGet(int index) override {
+    PChar WINAPI InfoGet(INT32 index) override {
         switch (index) {
-            case AIMP_PLUGIN_INFO_NAME:              return const_cast<PWCHAR>(kPluginName);
-            case AIMP_PLUGIN_INFO_AUTHOR:            return const_cast<PWCHAR>(L"Fl4sh");
-            case AIMP_PLUGIN_INFO_SHORT_DESCRIPTION: return const_cast<PWCHAR>(L"Discord Rich Presence with progress bar and cover art");
+            case AIMP_PLUGIN_INFO_NAME:              return const_cast<PChar>(kPluginName);
+            case AIMP_PLUGIN_INFO_AUTHOR:            return const_cast<PChar>(AIMP_TEXT("Fl4sh"));
+            case AIMP_PLUGIN_INFO_SHORT_DESCRIPTION: return const_cast<PChar>(AIMP_TEXT("Discord Rich Presence with progress bar and cover art"));
             default:                                 return nullptr;
         }
     }
     DWORD WINAPI InfoGetCategories() override { return AIMP_PLUGIN_CATEGORY_ADDONS; }
     HRESULT WINAPI Initialize(IAIMPCore* core) override;
     HRESULT WINAPI Finalize() override;
-    void WINAPI SystemNotification(int, IUnknown*) override {}
+    void WINAPI SystemNotification(INT32, IUnknown*) override {}
 
     IAIMPCore* Core() const { return core_; }
     void OnSettingsChanged() { forcePush_ = true; }
@@ -146,7 +206,9 @@ public:
     void Poll();
 
 private:
+#ifdef _WIN32
     static LRESULT CALLBACK TimerWndProc(HWND, UINT, WPARAM, LPARAM);
+#endif
     double ReadReal(int message);
     int ReadState();
     bool ReadTrack(TrackInfo& t, double& duration);
@@ -154,10 +216,14 @@ private:
     IAIMPCore* core_ = nullptr;
     ComPtr<IAIMPServicePlayer> player_;
     ComPtr<IAIMPServiceMessageDispatcher> dispatcher_;
+#ifdef _WIN32
     ComPtr<IAIMPServiceOptionsDialog> options_;
     OptionsFrame* frame_ = nullptr;
     HWND timerWnd_ = nullptr;
-    volatile LONG ref_ = 1;
+#else
+    EventHook* hook_ = nullptr;
+#endif
+    std::atomic<long> ref_{1};
 
     // polling state (main thread only)
     PlayState lastState_ = PlayState::Stopped;
@@ -168,13 +234,14 @@ private:
 };
 
 // ------------------------------------------------------------------------------------------------ frame impl
+#ifdef _WIN32
 
 HRESULT WINAPI OptionsFrame::GetName(IAIMPString** S) {
     IAIMPCore* core = owner_->Core();
     if (!core || !S) return E_FAIL;
     IAIMPString* str = nullptr;
     if (FAILED(core->CreateObject(IID_IAIMPString, reinterpret_cast<void**>(&str))) || !str) return E_FAIL;
-    str->SetData(const_cast<PWCHAR>(kPluginName), (int)wcslen(kPluginName));
+    str->SetData(const_cast<PChar>(kPluginName), (int)wcslen(kPluginName));
     *S = str;
     return S_OK;
 }
@@ -215,6 +282,24 @@ void WINAPI OptionsFrame::Notification(INT32 id) {
             break;
     }
 }
+#else
+void WINAPI EventHook::CoreMessage(DWORD message, INT32, void*, HRESULT*) {
+    if (!owner_) return;
+    switch (message) {
+        case AIMP_MSG_EVENT_PLAYER_STATE:
+        case AIMP_MSG_EVENT_STREAM_START:
+        case AIMP_MSG_EVENT_STREAM_START_SUBTRACK:
+        case AIMP_MSG_EVENT_STREAM_END:
+        case AIMP_MSG_EVENT_PLAYING_FILE_INFO:
+        case AIMP_MSG_EVENT_PROPERTY_VALUE:              // e.g. user seeked
+        case AIMP_MSG_EVENT_PLAYER_UPDATE_POSITION:      // every second while playing
+            owner_->Poll();
+            break;
+        default:
+            break;
+    }
+}
+#endif
 
 // ------------------------------------------------------------------------------------------------ plugin impl
 
@@ -230,6 +315,7 @@ HRESULT WINAPI Plugin::Initialize(IAIMPCore* core) {
     config::Load();
     Worker().Start();
 
+#ifdef _WIN32
     // settings tab inside AIMP's options dialog
     frame_ = new OptionsFrame(this);
     if (SUCCEEDED(core_->QueryInterface(IID_IAIMPServiceOptionsDialog, options_.putVoid())) && options_)
@@ -247,10 +333,19 @@ HRESULT WINAPI Plugin::Initialize(IAIMPCore* core) {
         SetWindowLongPtrW(timerWnd_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
         SetTimer(timerWnd_, 1, 500, nullptr);
     }
+#else
+    // player events arrive on AIMP's main thread, so all SDK calls stay there
+    hook_ = new EventHook(this);
+    if (FAILED(dispatcher_->Hook(hook_))) {
+        util::Log(L"Could not hook AIMP player events");
+    }
+    Poll();
+#endif
     return S_OK;
 }
 
 HRESULT WINAPI Plugin::Finalize() {
+#ifdef _WIN32
     if (timerWnd_) {
         KillTimer(timerWnd_, 1);
         DestroyWindow(timerWnd_);
@@ -264,10 +359,20 @@ HRESULT WINAPI Plugin::Finalize() {
         frame_->Release();
         frame_ = nullptr;
     }
+#else
+    if (hook_) {
+        hook_->Detach();
+        if (dispatcher_) dispatcher_->Unhook(hook_);
+        hook_->Release();
+        hook_ = nullptr;
+    }
+#endif
     Worker().Stop();               // clears the presence and joins the thread
     CoverResolver::ShutdownImaging();
 
+#ifdef _WIN32
     options_.reset();
+#endif
     player_.reset();
     dispatcher_.reset();
     if (core_) {
@@ -278,6 +383,7 @@ HRESULT WINAPI Plugin::Finalize() {
     return S_OK;
 }
 
+#ifdef _WIN32
 LRESULT CALLBACK Plugin::TimerWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_TIMER) {
         Plugin* self = reinterpret_cast<Plugin*>(GetWindowLongPtrW(h, GWLP_USERDATA));
@@ -286,6 +392,7 @@ LRESULT CALLBACK Plugin::TimerWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     return DefWindowProcW(h, m, w, l);
 }
+#endif
 
 // The player reports position / duration either as float or double depending on SDK revision.
 // Read into a zeroed 8-byte buffer: memory-safe in both cases, then decode.
@@ -396,6 +503,7 @@ void Plugin::Poll() {
 
 // ================================================================================ DLL exports
 
+#ifdef _WIN32
 extern "C" BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         g_hModule = inst;
@@ -404,7 +512,11 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID) {
     return TRUE;
 }
 
-extern "C" __declspec(dllexport) HRESULT WINAPI AIMPPluginGetHeader(IAIMPPlugin** header) {
+// Exported without decoration through aimp_discord_rpc.def (32-bit stdcall would otherwise be "_AIMPPluginGetHeader@4")
+extern "C" HRESULT WINAPI AIMPPluginGetHeader(IAIMPPlugin** header) {
+#else
+extern "C" __attribute__((visibility("default"))) HRESULT AIMPPluginGetHeader(IAIMPPlugin** header) {
+#endif
     if (!header) return E_POINTER;
     *header = new Plugin();
     return S_OK;

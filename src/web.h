@@ -1,4 +1,4 @@
-// Tiny blocking HTTP(S) client based on WinHTTP.
+// Tiny blocking HTTP(S) client (Windows: WinHTTP, Linux: libcurl).
 #pragma once
 #include <string>
 #include <vector>

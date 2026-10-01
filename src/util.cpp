@@ -1,12 +1,25 @@
 #include "util.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
 #include <cwctype>
+#include <thread>
+
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace util {
 
+static void AppendUtf8(std::string& out, uint32_t cp);
+
+#ifdef _WIN32
 std::string ToUtf8(const std::wstring& w) {
     if (w.empty()) return std::string();
     int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
@@ -24,6 +37,45 @@ std::wstring FromUtf8(const std::string& s) {
     MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &w[0], n);
     return w;
 }
+#else
+// wchar_t is UTF-32 on Linux
+std::string ToUtf8(const std::wstring& w) {
+    std::string s;
+    s.reserve(w.size());
+    for (wchar_t c : w) {
+        uint32_t cp = (uint32_t)c;
+        if (cp > 0x10FFFF || (cp >= 0xD800 && cp < 0xE000)) cp = 0xFFFD;
+        AppendUtf8(s, cp);
+    }
+    return s;
+}
+
+std::wstring FromUtf8(const std::string& s) {
+    std::wstring w;
+    w.reserve(s.size());
+    for (size_t i = 0; i < s.size();) {
+        unsigned char c = (unsigned char)s[i];
+        uint32_t cp;
+        int extra;
+        if (c < 0x80)              { cp = c;        extra = 0; }
+        else if ((c & 0xE0) == 0xC0) { cp = c & 0x1F; extra = 1; }
+        else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; extra = 2; }
+        else if ((c & 0xF8) == 0xF0) { cp = c & 0x07; extra = 3; }
+        else { w += (wchar_t)0xFFFD; ++i; continue; }
+        if (i + extra >= s.size()) { w += (wchar_t)0xFFFD; break; }   // truncated sequence
+        bool ok = true;
+        for (int k = 1; k <= extra; ++k) {
+            unsigned char cc = (unsigned char)s[i + k];
+            if ((cc & 0xC0) != 0x80) { ok = false; break; }
+            cp = (cp << 6) | (cc & 0x3F);
+        }
+        if (!ok) { w += (wchar_t)0xFFFD; ++i; continue; }
+        w += (wchar_t)cp;
+        i += 1 + extra;
+    }
+    return w;
+}
+#endif
 
 std::wstring Trim(const std::wstring& s) {
     size_t a = 0, b = s.size();
@@ -248,13 +300,66 @@ void Log(const wchar_t* fmt, ...) {
     wchar_t buf[1024];
     va_list ap;
     va_start(ap, fmt);
-    _vsnwprintf(buf, 1023, fmt, ap);
+    vswprintf(buf, 1024, fmt, ap);
     va_end(ap);
     buf[1023] = 0;
     std::wstring line = L"[AIMP DiscordRPC] ";
     line += buf;
     line += L"\n";
+#ifdef _WIN32
     OutputDebugStringW(line.c_str());
+#else
+    static const bool enabled = getenv("AIMP_DISCORD_RPC_DEBUG") != nullptr;
+    if (enabled) fputs(ToUtf8(line).c_str(), stderr);
+#endif
 }
+
+// ---------------------------------------------------------------- OS helpers
+
+uint64_t TickMs() {
+    using namespace std::chrono;
+    return (uint64_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
+void SleepMs(unsigned ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
+
+#ifdef _WIN32
+FILE* OpenFile(const std::wstring& path, const char* mode) {
+    std::wstring m(mode, mode + strlen(mode));
+    return _wfopen(path.c_str(), m.c_str());
+}
+bool    Seek64(FILE* f, uint64_t offset, int origin) { return _fseeki64(f, (long long)offset, origin) == 0; }
+int64_t Tell64(FILE* f) { return _ftelli64(f); }
+bool IsRegularFile(const std::wstring& path) {
+    DWORD a = GetFileAttributesW(path.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+}
+void RemoveFile(const std::wstring& path) { DeleteFileW(path.c_str()); }
+void MakeDir(const std::wstring& path) { CreateDirectoryW(path.c_str(), nullptr); }
+std::wstring GetEnv(const wchar_t* name) {
+    DWORD n = GetEnvironmentVariableW(name, nullptr, 0);
+    if (n == 0) return std::wstring();
+    std::wstring v(n, L'\0');
+    n = GetEnvironmentVariableW(name, &v[0], n);
+    v.resize(n);
+    return v;
+}
+uint32_t ProcessId() { return (uint32_t)GetCurrentProcessId(); }
+#else
+FILE*   OpenFile(const std::wstring& path, const char* mode) { return fopen(ToUtf8(path).c_str(), mode); }
+bool    Seek64(FILE* f, uint64_t offset, int origin) { return fseeko(f, (off_t)offset, origin) == 0; }
+int64_t Tell64(FILE* f) { return (int64_t)ftello(f); }
+bool IsRegularFile(const std::wstring& path) {
+    struct stat st;
+    return stat(ToUtf8(path).c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+void RemoveFile(const std::wstring& path) { unlink(ToUtf8(path).c_str()); }
+void MakeDir(const std::wstring& path) { mkdir(ToUtf8(path).c_str(), 0700); }
+std::wstring GetEnv(const wchar_t* name) {
+    const char* v = getenv(ToUtf8(name).c_str());
+    return v ? FromUtf8(v) : std::wstring();
+}
+uint32_t ProcessId() { return (uint32_t)getpid(); }
+#endif
 
 }  // namespace util

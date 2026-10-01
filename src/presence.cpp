@@ -73,11 +73,22 @@ PresenceWorker& Worker() {
     return w;
 }
 
-PresenceWorker::PresenceWorker() { wake_ = CreateEventW(nullptr, FALSE, FALSE, nullptr); }
+PresenceWorker::PresenceWorker() = default;
 
-PresenceWorker::~PresenceWorker() {
-    Stop();
-    if (wake_) CloseHandle(wake_);
+PresenceWorker::~PresenceWorker() { Stop(); }
+
+void PresenceWorker::Wake() {
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        wake_ = true;
+    }
+    wakeCv_.notify_one();
+}
+
+void PresenceWorker::WaitForWork(unsigned ms) {
+    std::unique_lock<std::mutex> lk(mu_);
+    wakeCv_.wait_for(lk, std::chrono::milliseconds(ms), [this] { return wake_ || stop_.load(); });
+    wake_ = false;
 }
 
 void PresenceWorker::Start() {
@@ -89,7 +100,7 @@ void PresenceWorker::Start() {
 void PresenceWorker::Stop() {
     if (!thread_.joinable()) return;
     stop_ = true;
-    SetEvent(wake_);
+    Wake();
     thread_.join();
 }
 
@@ -99,7 +110,7 @@ void PresenceWorker::Submit(const Snapshot& s) {
         snap_ = s;
         dirty_ = true;
     }
-    SetEvent(wake_);
+    Wake();
 }
 
 void PresenceWorker::Refresh() {
@@ -108,7 +119,7 @@ void PresenceWorker::Refresh() {
         std::lock_guard<std::mutex> lk(mu_);
         dirty_ = true;
     }
-    SetEvent(wake_);
+    Wake();
 }
 
 void PresenceWorker::ClearCoverCache() {
@@ -244,8 +255,18 @@ void PresenceWorker::Run() {
     using namespace std::chrono;
 
     while (!stop_) {
-        WaitForSingleObject(wake_, 250);
+        WaitForWork(250);
         if (stop_) break;
+
+        // Linux has no settings page: pick up edits of the INI file (checked about every 2 s)
+        if (util::TickMs() - lastConfigCheck_ >= 2000) {
+            lastConfigCheck_ = util::TickMs();
+            if (config::ReloadIfChanged()) {
+                resetCover_ = true;
+                std::lock_guard<std::mutex> lk(mu_);
+                dirty_ = true;
+            }
+        }
 
         Config cfg = config::Get();
         if (resetCover_.exchange(false)) coverTrackId_ = 0;
@@ -255,7 +276,7 @@ void PresenceWorker::Run() {
         if (!active) {
             if (ipc_.Connected()) {
                 ipc_.SetActivity("");
-                Sleep(50);
+                util::SleepMs(50);
                 ipc_.Disconnect();
             }
             shown_ = false;
@@ -352,7 +373,7 @@ void PresenceWorker::Run() {
     // leaving: remove the presence so it does not linger after AIMP closed
     if (ipc_.Connected()) {
         ipc_.SetActivity("");
-        Sleep(100);
+        util::SleepMs(100);
         ipc_.Disconnect();
     }
 }
