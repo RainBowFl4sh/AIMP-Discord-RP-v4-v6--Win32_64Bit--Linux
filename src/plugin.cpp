@@ -94,7 +94,7 @@ public:
     HRESULT WINAPI GetName(IAIMPString** S) override;
     HWND WINAPI CreateFrame(HWND parent) override;
     void WINAPI DestroyFrame() override;
-    void WINAPI Notification(int id) override;
+    void WINAPI Notification(INT32 id) override;
 
     void SetService(IAIMPServiceOptionsDialog* svc) { service_ = svc; }
 
@@ -193,7 +193,7 @@ void WINAPI OptionsFrame::DestroyFrame() {
     }
 }
 
-void WINAPI OptionsFrame::Notification(int id) {
+void WINAPI OptionsFrame::Notification(INT32 id) {
     switch (id) {
         case AIMP_SERVICE_OPTIONSDIALOG_NOTIFICATION_LOAD:
             if (page_) page_->Load();
@@ -202,6 +202,13 @@ void WINAPI OptionsFrame::Notification(int id) {
             if (page_) {
                 page_->Save();
                 if (g_plugin) g_plugin->OnSettingsChanged();
+            }
+            break;
+        case AIMP_SERVICE_OPTIONSDIALOG_NOTIFICATION_RESET:      // "Reset" button in AIMP's options dialog
+            if (page_) {
+                Config defaults;
+                page_->Load(&defaults);
+                if (service_) service_->FrameModified(this);
             }
             break;
         default:
@@ -299,6 +306,7 @@ double Plugin::ReadReal(int message) {
 }
 
 int Plugin::ReadState() {
+    if (player_) return player_->GetState();   // AIMP_PLAYER_STATE_XXX
     alignas(8) uint8_t buf[8] = {0};
     if (FAILED(dispatcher_->Send(AIMP_MSG_PROPERTY_PLAYER_STATE, AIMP_MSG_PROPVALUE_GET, buf))) return kPlayerStopped;
     int32_t v;
@@ -308,12 +316,19 @@ int Plugin::ReadState() {
 
 bool Plugin::ReadTrack(TrackInfo& t, double& duration) {
     ComPtr<IAIMPPlaylistItem> item;
-    if (FAILED(player_->GetPlaylistItem(item.put())) || !item) return false;
+    if (SUCCEEDED(player_->GetPlaylistItem(item.put())) && item)
+        t.fileName = PropString(item.get(), AIMP_PLAYLISTITEM_PROPID_FILENAME);
 
-    t.fileName = PropString(item.get(), AIMP_PLAYLISTITEM_PROPID_FILENAME);
-
+    // Prefer the player's live info: it also has the current song of internet radio streams and works
+    // when playback was started outside a playlist (e.g. music library). Fall back to the playlist item.
     ComPtr<IAIMPFileInfo> info;
-    if (SUCCEEDED(item->GetValueAsObject(AIMP_PLAYLISTITEM_PROPID_FILEINFO, IID_IAIMPFileInfo, info.putVoid())) && info) {
+    if (FAILED(player_->GetInfo(info.put())) || !info) {
+        info.reset();
+        if (item) item->GetValueAsObject(AIMP_PLAYLISTITEM_PROPID_FILEINFO, IID_IAIMPFileInfo, info.putVoid());
+    }
+    if (!info && !item) return false;
+
+    if (info) {
         t.artist      = PropString(info.get(), AIMP_FILEINFO_PROPID_ARTIST);
         t.albumArtist = PropString(info.get(), AIMP_FILEINFO_PROPID_ALBUMARTIST);
         t.title       = PropString(info.get(), AIMP_FILEINFO_PROPID_TITLE);
@@ -321,6 +336,7 @@ bool Plugin::ReadTrack(TrackInfo& t, double& duration) {
         t.genre       = PropString(info.get(), AIMP_FILEINFO_PROPID_GENRE);
         t.year        = PropString(info.get(), AIMP_FILEINFO_PROPID_DATE);
         t.trackNumber = PropString(info.get(), AIMP_FILEINFO_PROPID_TRACKNUMBER);
+        if (t.fileName.empty()) t.fileName = PropString(info.get(), AIMP_FILEINFO_PROPID_FILENAME);
         double d = 0;
         if (SUCCEEDED(info->GetValueAsFloat(AIMP_FILEINFO_PROPID_DURATION, &d)) && d > 0) duration = d;
     }
@@ -344,10 +360,14 @@ void Plugin::Poll() {
         if (lastState_ != PlayState::Stopped) push = true;
         s.trackId = lastId_;
     } else {
-        double pos = ReadReal(AIMP_MSG_PROPERTY_PLAYER_POSITION);
-        double dur = 0;
+        double pos = 0, dur = 0;
+        if (FAILED(player_->GetPosition(&pos)) || !std::isfinite(pos) || pos < 0)
+            pos = ReadReal(AIMP_MSG_PROPERTY_PLAYER_POSITION);
+        if (FAILED(player_->GetDuration(&dur)) || !std::isfinite(dur) || dur < 0) dur = 0;
         TrackInfo t;
-        if (!ReadTrack(t, dur)) return;
+        double infoDur = 0;
+        if (!ReadTrack(t, infoDur)) return;
+        if (dur <= 0) dur = infoDur;
         if (dur <= 0) dur = ReadReal(AIMP_MSG_PROPERTY_PLAYER_DURATION);
 
         uint64_t id = util::Fnv1a(t.fileName + L"|" + t.artist + L"|" + t.title + L"|" + t.album);

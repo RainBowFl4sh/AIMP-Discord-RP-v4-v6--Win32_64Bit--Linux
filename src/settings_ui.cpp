@@ -399,10 +399,10 @@ void SettingsPage::OnCommand(WPARAM w, LPARAM) {
     if (code == EN_CHANGE || code == CBN_SELCHANGE || (code == BN_CLICKED && id != IDC_STATUS)) onModified_();
 }
 
-void SettingsPage::Load() {
+void SettingsPage::Load(const Config* from) {
     if (!hwnd_) return;
     loading_ = true;
-    Config c = config::Get();
+    Config c = from ? *from : config::Get();
 
     SetCheck(IDC_ENABLE, c.enabled);
     SetCheck(IDC_CUSTOMAPP, c.useCustomApp);

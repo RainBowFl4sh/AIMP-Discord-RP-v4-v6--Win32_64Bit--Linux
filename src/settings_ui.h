@@ -3,6 +3,8 @@
 #include <windows.h>
 
 #include <functional>
+
+#include "config.h"
 #include <string>
 
 class SettingsPage {
@@ -11,7 +13,7 @@ public:
     static SettingsPage* Create(HWND parent, std::function<void()> onModified);
 
     HWND Hwnd() const { return hwnd_; }
-    void Load();      // config -> controls
+    void Load(const Config* from = nullptr);   // config (or given defaults) -> controls
     void Save();      // controls -> config, applies immediately
     void Destroy();   // destroys the window and deletes the object
 
