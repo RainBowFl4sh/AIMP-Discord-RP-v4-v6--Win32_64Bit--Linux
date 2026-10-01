@@ -44,7 +44,7 @@ const wchar_t* kTabNames[kPages] = {L"General", L"Display", L"Cover art", L"Onli
 HWND SettingsPage::CreateChildDialog(HWND parent, DLGPROC proc, LPARAM param, bool visible) {
     // Empty in-memory dialog template: DLGTEMPLATE + menu/class/title (all zero). Controls are added in code.
     alignas(4) WORD tmpl[12] = {0};
-    DWORD style = WS_CHILD | WS_CLIPCHILDREN | DS_CONTROL | (visible ? WS_VISIBLE : 0);
+    DWORD style = WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | DS_CONTROL | (visible ? WS_VISIBLE : 0);
     DWORD ex = WS_EX_CONTROLPARENT;
     tmpl[0] = LOWORD(style); tmpl[1] = HIWORD(style);
     tmpl[2] = LOWORD(ex);    tmpl[3] = HIWORD(ex);
@@ -230,6 +230,10 @@ void SettingsPage::BuildUi() {
     for (int i = 0; i < kPages; ++i) {
         pages_[i] = CreateChildDialog(hwnd_, &SettingsPage::PageProc, 0, false);
         EnableThemeDialogTexture(pages_[i], ETDT_ENABLETAB);
+        // Root cause of the "blank until hovered" bug: new child windows are inserted at the BOTTOM of the
+        // z-order, so the pages lay *under* the tab control and every repaint of the tab control painted
+        // over them. Put the pages on top; the tab control (WS_CLIPSIBLINGS) then leaves their area alone.
+        SetWindowPos(pages_[i], HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
     BuildGeneral(pages_[0]);
     BuildDisplay(pages_[1]);
