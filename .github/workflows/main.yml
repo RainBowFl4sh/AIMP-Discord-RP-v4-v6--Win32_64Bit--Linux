@@ -56,7 +56,7 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mingw-w64 wine64 wine32:i386
+          sudo apt-get install -y --no-install-recommends mingw-w64 wine wine64 wine32:i386
       - name: Build (MinGW cross-compile)
         run: |
           for arch in x64 x86; do

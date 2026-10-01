@@ -7,14 +7,22 @@ set -euo pipefail
 BUILD="$(cd "${1:-build}" && pwd)"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TMP="$(mktemp -d)"
-trap 'kill "${SRV:-0}" 2>/dev/null || true; wineserver -k 2>/dev/null || true; rm -rf "$TMP"' EXIT
+SRV=""
+cleanup() {
+    if [ -n "$SRV" ]; then kill "$SRV" 2>/dev/null || true; fi   # never "kill 0": that hits the whole process group
+    wineserver -k 2>/dev/null || true
+    rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 export WINEPREFIX="$TMP/prefix" WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml="
 export XDG_RUNTIME_DIR="$TMP/run"
 mkdir -p "$XDG_RUNTIME_DIR"
+command -v wine >/dev/null || { echo "wine is not installed" >&2; exit 1; }
 wineboot -i >/dev/null 2>&1 || true
 
-APPDATA_DIR="$(ls -d "$WINEPREFIX"/drive_c/users/*/AppData/Roaming 2>/dev/null | head -1)"
+APPDATA_DIR="$(ls -d "$WINEPREFIX"/drive_c/users/*/AppData/Roaming 2>/dev/null | head -1 || true)"
+if [ -z "$APPDATA_DIR" ]; then echo "Wine prefix was not created (wineboot failed)" >&2; exit 1; fi
 mkdir -p "$APPDATA_DIR/AIMP"
 printf '[DiscordRPC]\r\nCoverEnabled=0\r\n' > "$APPDATA_DIR/AIMP/DiscordRPC.ini"   # no network in the test
 

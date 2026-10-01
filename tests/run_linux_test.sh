@@ -7,7 +7,12 @@ set -euo pipefail
 BUILD="$(cd "${1:-build}" && pwd)"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TMP="$(mktemp -d)"
-trap 'kill "${SRV:-0}" 2>/dev/null || true; rm -rf "$TMP"' EXIT
+SRV=""
+cleanup() {
+    if [ -n "$SRV" ]; then kill "$SRV" 2>/dev/null || true; fi   # never "kill 0": that hits the whole process group
+    rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 export XDG_RUNTIME_DIR="$TMP/run" XDG_CONFIG_HOME="$TMP/config"
 mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME/AIMP"
