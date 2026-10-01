@@ -68,6 +68,32 @@ Make sure the plugin is ticked in *Preferences -> Plugins*. As soon as music is 
 
 **Updating:** simply install the new version the same way - your settings are kept.
 
+## Settings
+
+All options are in AIMP under *Preferences -> Plugins -> Discord Rich Presence* (Windows; on Linux see
+[Native AIMP for Linux](#native-aimp-for-linux) - same options, in an INI file).
+
+**General** - on/off, activity type (Listening with progress bar / Playing), what the Discord status shows, paused
+behaviour, hiding streams or paths, live connection status, own Discord application (advanced)
+
+![General tab](docs/screenshots/settings-general.png)
+
+**Display** - text templates for both lines and the tooltips, play / pause icon, text progress bar
+
+![Display tab](docs/screenshots/settings-display.png)
+
+**Cover art** - local covers (tags / folder image), upload host (catbox.moe or Imgur), cover cache
+
+![Cover art tab](docs/screenshots/settings-cover-art.png)
+
+**Online sources** - cover lookup on Spotify, Deezer, Apple Music / iTunes, Bandcamp, Discogs, MusicBrainz
+
+![Online sources tab](docs/screenshots/settings-online-sources.png)
+
+**Links** - clickable song title (YouTube search by default, or your own link)
+
+![Links tab](docs/screenshots/settings-links.png)
+
 ## Linux
 
 ### Native AIMP for Linux
