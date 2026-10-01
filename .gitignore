@@ -1,0 +1,4 @@
+# local build output / download packages
+dist/
+build/
+build-*/
