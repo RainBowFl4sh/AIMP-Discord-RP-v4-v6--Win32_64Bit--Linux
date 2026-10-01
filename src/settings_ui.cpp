@@ -16,24 +16,24 @@ namespace {
 enum Ids {
     IDC_TAB = 100,
     // General
-    IDC_ENABLE = 200, IDC_CLIENTID, IDC_OPENPORTAL, IDC_TYPE, IDC_STATUSDISP, IDC_TIMESTAMPS, IDC_PAUSED,
+    IDC_ENABLE = 200, IDC_CUSTOMAPP, IDC_CLIENTID, IDC_OPENPORTAL, IDC_CLIENTIDLABEL, IDC_TYPE, IDC_STATUSDISP, IDC_TIMESTAMPS, IDC_PAUSED,
     IDC_PAUSEDMIN, IDC_HIDESTREAMS, IDC_EXCLUDE, IDC_STATUS,
     // Display
-    IDC_DETAILS = 300, IDC_STATE, IDC_LARGETEXT, IDC_SMALLTEXT, IDC_SMALLICON, IDC_PLAYKEY, IDC_PAUSEKEY,
+    IDC_DETAILS = 300, IDC_STATE, IDC_LARGETEXT, IDC_SMALLTEXT, IDC_SMALLICON,
     IDC_BARLEN, IDC_REFRESH,
     // Cover
     IDC_COVER = 400, IDC_EMBEDDED, IDC_FOLDER, IDC_FOLDERNAMES, IDC_UPLOADHOST, IDC_IMGURID, IDC_PREFERLOCAL,
-    IDC_FALLBACK, IDC_CLEARCACHE,
+    IDC_CLEARCACHE,
     // Online sources
     IDC_SPOTIFY = 600, IDC_SPOTIFYID, IDC_SPOTIFYSECRET, IDC_DEEZER, IDC_ITUNES, IDC_BANDCAMP, IDC_DISCOGS,
     IDC_DISCOGSTOKEN, IDC_MUSICBRAINZ, IDC_OPENSPOTIFY, IDC_OPENDISCOGS,
     // Buttons
-    IDC_BTN1 = 500, IDC_BTN1LABEL, IDC_BTN1URL, IDC_BTN2, IDC_BTN2LABEL, IDC_BTN2URL,
+    IDC_TITLELINK = 500, IDC_TITLELINKCUSTOM, IDC_TITLELINKURL,
 };
 
 const UINT_PTR TIMER_STATUS = 1;
 const int kPages = 5;
-const wchar_t* kTabNames[kPages] = {L"General", L"Display", L"Cover art", L"Online sources", L"Buttons"};
+const wchar_t* kTabNames[kPages] = {L"General", L"Display", L"Cover art", L"Online sources", L"Links"};
 
 }  // namespace
 
@@ -108,6 +108,14 @@ INT_PTR CALLBACK SettingsPage::MainProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 }
 
 INT_PTR CALLBACK SettingsPage::PageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_SHOWWINDOW && w) {  // repaint edit borders once the page is really visible
+        PostMessageW(h, WM_APP + 1, 0, 0);
+        return FALSE;
+    }
+    if (m == WM_APP + 1) {
+        RedrawWindow(h, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+        return TRUE;
+    }
     if (m == WM_COMMAND) {  // bubble up to the main dialog
         SendMessageW(GetParent(h), WM_COMMAND, w, l);
         return TRUE;
@@ -133,7 +141,10 @@ HWND SettingsPage::Check(HWND page, int id, const wchar_t* text, int x, int y, i
     return Ctl(page, L"BUTTON", text, BS_AUTOCHECKBOX | WS_TABSTOP, 0, x, y, w, 18, id);
 }
 HWND SettingsPage::Edit(HWND page, int id, int x, int y, int w) {
-    return Ctl(page, L"EDIT", L"", ES_AUTOHSCROLL | WS_TABSTOP, WS_EX_CLIENTEDGE, x, y, w, 22, id);
+    HWND e = Ctl(page, L"EDIT", L"", ES_AUTOHSCROLL | WS_TABSTOP, WS_EX_CLIENTEDGE, x, y, w, 22, id);
+    // make sure the frame (border) is painted right away, not only on mouse hover
+    if (e) SetWindowPos(e, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    return e;
 }
 HWND SettingsPage::Combo(HWND page, int id, std::initializer_list<const wchar_t*> items, int x, int y, int w) {
     HWND c = Ctl(page, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, 0, x, y, w, 200, id);
@@ -222,18 +233,15 @@ void SettingsPage::Layout() {
 
 void SettingsPage::ShowPage(int index) {
     for (int i = 0; i < kPages; ++i) ShowWindow(pages_[i], i == index ? SW_SHOW : SW_HIDE);
+    // edit boxes otherwise only draw their border after the mouse hovered over them
+    if (index >= 0 && index < kPages && pages_[index])
+        RedrawWindow(pages_[index], nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 
 void SettingsPage::BuildGeneral(HWND p) {
     int y = 8;
     Check(p, IDC_ENABLE, L"Enable Discord Rich Presence", 10, y, 470);                       y += 26;
-    Label(p, L"Discord Application ID (Client ID):", 10, y, 320);                            y += 18;
-    Edit(p, IDC_CLIENTID, 10, y, 250);
-    PushButton(p, IDC_OPENPORTAL, L"Open Developer Portal", 270, y - 1, 170);                y += 28;
-    Label(p, L"Create a free application in the Discord Developer Portal. Its name is what Discord shows "
-             L"(e.g. \"Listening to AIMP\"). Optional art assets (fallback logo, play/pause icons) are uploaded "
-             L"there under Rich Presence > Art Assets.", 10, y, 470, 44);                    y += 50;
-
     Label(p, L"Activity type:", 10, y + 3, 190);
     Combo(p, IDC_TYPE, {L"Listening (shows a progress bar)", L"Playing (elapsed time only)"}, 205, y, 265); y += 28;
     Label(p, L"Discord status text shows:", 10, y + 3, 190);
@@ -241,14 +249,19 @@ void SettingsPage::BuildGeneral(HWND p) {
 
     Check(p, IDC_TIMESTAMPS, L"Show progress bar / elapsed time", 10, y, 470);               y += 24;
     Label(p, L"When playback is paused:", 10, y + 3, 190);
-    Combo(p, IDC_PAUSED, {L"Show \"Paused\" status", L"Clear presence"}, 205, y, 265);       y += 28;
+    Combo(p, IDC_PAUSED, {L"Show \"Paused\" status", L"Hide (PreMiD / other activity shows)"}, 205, y, 265);       y += 28;
     Label(p, L"Clear presence after pause for (min, 0 = never):", 10, y + 3, 290);
     Edit(p, IDC_PAUSEDMIN, 305, y, 60);                                                      y += 28;
     Check(p, IDC_HIDESTREAMS, L"Hide presence for internet radio / streams", 10, y, 470);    y += 24;
     Label(p, L"Hide presence when the file path contains (separate with ;):", 10, y, 470);   y += 18;
     Edit(p, IDC_EXCLUDE, 10, y, 460);                                                        y += 30;
-    Ctl(p, L"STATIC", L"Status: ...", SS_LEFT, 0, 10, y, 470, 32, IDC_STATUS);               y += 36;
-    Label(p, L"AIMP Discord Rich Presence 1.1.0", 10, y, 470);
+    Ctl(p, L"STATIC", L"Status: ...", SS_LEFT, 0, 10, y, 470, 32, IDC_STATUS);               y += 40;
+    // advanced: own Discord application (normally not needed - everyone uses the built-in one)
+    Check(p, IDC_CUSTOMAPP, L"Advanced: use my own Discord application", 10, y, 470);         y += 24;
+    Label(p, L"Application ID:", 28, y + 3, 120, 18, IDC_CLIENTIDLABEL);
+    Edit(p, IDC_CLIENTID, 155, y, 200);
+    PushButton(p, IDC_OPENPORTAL, L"Developer Portal", 365, y - 1, 105);                      y += 34;
+    Label(p, L"AIMP Discord Rich Presence 1.3.0 by Fl4sh", 10, y, 470);
 }
 
 void SettingsPage::BuildDisplay(HWND p) {
@@ -260,8 +273,6 @@ void SettingsPage::BuildDisplay(HWND p) {
     Label(p, L"Cover tooltip:", 10, y + 3, 190);                   Edit(p, IDC_LARGETEXT, 205, y, 265); y += 28;
     Label(p, L"Small icon tooltip:", 10, y + 3, 190);              Edit(p, IDC_SMALLTEXT, 205, y, 265); y += 32;
     Check(p, IDC_SMALLICON, L"Show play / pause icon (small image)", 10, y, 470);            y += 24;
-    Label(p, L"Asset key for \"playing\" icon:", 10, y + 3, 190);  Edit(p, IDC_PLAYKEY, 205, y, 150);   y += 28;
-    Label(p, L"Asset key for \"paused\" icon:", 10, y + 3, 190);   Edit(p, IDC_PAUSEKEY, 205, y, 150);  y += 32;
     Label(p, L"Text progress bar length (4-30):", 10, y + 3, 190); Edit(p, IDC_BARLEN, 205, y, 60);     y += 28;
     Label(p, L"Refresh interval in seconds (min 5):", 10, y + 3, 190); Edit(p, IDC_REFRESH, 205, y, 60); y += 32;
     Label(p, L"%bar% / %pos% / %percent% are static text and only refresh at the interval above. The native "
@@ -283,7 +294,6 @@ void SettingsPage::BuildCover(HWND p) {
     Label(p, L"Imgur Client-ID:", 28, y + 3, 170);         Edit(p, IDC_IMGURID, 205, y, 265);  y += 28;
     Check(p, IDC_PREFERLOCAL, L"Prefer the file's own cover (online lookup only if it has none)", 10, y, 470); y += 22;
     Label(p, L"Uploaded covers are reachable by anyone who has the link.", 28, y, 440);     y += 26;
-    Label(p, L"Fallback asset key:", 10, y + 3, 190);      Edit(p, IDC_FALLBACK, 205, y, 150); y += 32;
     PushButton(p, IDC_CLEARCACHE, L"Clear cover cache", 10, y, 170);
 }
 
@@ -306,14 +316,12 @@ void SettingsPage::BuildSources(HWND p) {
 
 void SettingsPage::BuildButtons(HWND p) {
     int y = 8;
-    Label(p, L"Discord shows up to two buttons. Buttons are not visible on your own profile, only to others. "
-             L"Placeholders in URLs are URL-encoded automatically.", 10, y, 470, 32);        y += 40;
-    Check(p, IDC_BTN1, L"Button 1", 10, y, 470);                                              y += 24;
-    Label(p, L"Label:", 28, y + 3, 80);  Edit(p, IDC_BTN1LABEL, 110, y, 360);                 y += 26;
-    Label(p, L"URL:", 28, y + 3, 80);    Edit(p, IDC_BTN1URL, 110, y, 360);                   y += 36;
-    Check(p, IDC_BTN2, L"Button 2", 10, y, 470);                                              y += 24;
-    Label(p, L"Label:", 28, y + 3, 80);  Edit(p, IDC_BTN2LABEL, 110, y, 360);                 y += 26;
-    Label(p, L"URL:", 28, y + 3, 80);    Edit(p, IDC_BTN2URL, 110, y, 360);
+    Check(p, IDC_TITLELINK, L"Make the song title clickable in Discord", 10, y, 470);           y += 22;
+    Label(p, L"By default a click on the title opens a YouTube search for artist + title.", 28, y, 440); y += 30;
+    Check(p, IDC_TITLELINKCUSTOM, L"Use my own link instead", 28, y, 440);                        y += 24;
+    Label(p, L"URL:", 46, y + 3, 50);   Edit(p, IDC_TITLELINKURL, 100, y, 370);                  y += 30;
+    Label(p, L"Placeholders: %artist% %title% %album% %albumartist% %year% - they are URL-encoded "
+             L"automatically. Example: https://music.youtube.com/search?q=%artist%+%title%", 46, y, 424, 44);
 }
 
 // ================================================================================ behaviour
@@ -329,8 +337,19 @@ void SettingsPage::UpdateStatus() {
     }
 }
 
+void SettingsPage::UpdateEnabled() {
+    const bool custom = SendMessageW(Item(IDC_CUSTOMAPP), BM_GETCHECK, 0, 0) == BST_CHECKED;
+    for (int id : {IDC_CLIENTIDLABEL, IDC_CLIENTID, IDC_OPENPORTAL}) ShowWindow(Item(id), custom ? SW_SHOW : SW_HIDE);
+    const bool link = SendMessageW(Item(IDC_TITLELINK), BM_GETCHECK, 0, 0) == BST_CHECKED;
+    const bool own  = SendMessageW(Item(IDC_TITLELINKCUSTOM), BM_GETCHECK, 0, 0) == BST_CHECKED;
+    EnableWindow(Item(IDC_TITLELINKCUSTOM), link);
+    EnableWindow(Item(IDC_TITLELINKURL), link && own);
+}
+
 void SettingsPage::OnCommand(WPARAM w, LPARAM) {
     int id = LOWORD(w), code = HIWORD(w);
+    if (code == BN_CLICKED && (id == IDC_CUSTOMAPP || id == IDC_TITLELINK || id == IDC_TITLELINKCUSTOM))
+        UpdateEnabled();
     if (id == IDC_OPENPORTAL && code == BN_CLICKED) {
         ShellExecuteW(hwnd_, L"open", L"https://discord.com/developers/applications", nullptr, nullptr, SW_SHOWNORMAL);
         return;
@@ -358,11 +377,12 @@ void SettingsPage::Load() {
     Config c = config::Get();
 
     SetCheck(IDC_ENABLE, c.enabled);
-    SetText(IDC_CLIENTID, c.clientId);
+    SetCheck(IDC_CUSTOMAPP, c.useCustomApp);
+    SetText(IDC_CLIENTID, c.customClientId);
     SetSel(IDC_TYPE, c.activityType == 0 ? 1 : 0);
     SetSel(IDC_STATUSDISP, c.statusDisplay);
     SetCheck(IDC_TIMESTAMPS, c.showTimestamps);
-    SetSel(IDC_PAUSED, c.pausedBehavior == 1 ? 1 : 0);
+    SetSel(IDC_PAUSED, c.pausedBehavior == 0 ? 0 : 1);
     SetText(IDC_PAUSEDMIN, std::to_wstring(c.clearAfterPaused));
     SetCheck(IDC_HIDESTREAMS, c.hideStreams);
     SetText(IDC_EXCLUDE, c.excludePaths);
@@ -372,8 +392,6 @@ void SettingsPage::Load() {
     SetText(IDC_LARGETEXT, c.largeText);
     SetText(IDC_SMALLTEXT, c.smallText);
     SetCheck(IDC_SMALLICON, c.showSmallIcon);
-    SetText(IDC_PLAYKEY, c.playKey);
-    SetText(IDC_PAUSEKEY, c.pauseKey);
     SetText(IDC_BARLEN, std::to_wstring(c.barLength));
     SetText(IDC_REFRESH, std::to_wstring(c.refreshSeconds));
 
@@ -393,14 +411,11 @@ void SettingsPage::Load() {
     SetCheck(IDC_DISCOGS, c.srcDiscogs);
     SetText(IDC_DISCOGSTOKEN, c.discogsToken);
     SetCheck(IDC_MUSICBRAINZ, c.srcMusicBrainz);
-    SetText(IDC_FALLBACK, c.fallbackKey);
 
-    SetCheck(IDC_BTN1, c.btn1Enabled);
-    SetText(IDC_BTN1LABEL, c.btn1Label);
-    SetText(IDC_BTN1URL, c.btn1Url);
-    SetCheck(IDC_BTN2, c.btn2Enabled);
-    SetText(IDC_BTN2LABEL, c.btn2Label);
-    SetText(IDC_BTN2URL, c.btn2Url);
+    SetCheck(IDC_TITLELINK, c.titleLink);
+    SetCheck(IDC_TITLELINKCUSTOM, c.titleLinkCustom);
+    SetText(IDC_TITLELINKURL, c.titleLinkUrl);
+    UpdateEnabled();
 
     loading_ = false;
     UpdateStatus();
@@ -411,11 +426,12 @@ void SettingsPage::Save() {
     Config c = config::Get();
 
     c.enabled          = GetCheck(IDC_ENABLE);
-    c.clientId         = util::Trim(GetText(IDC_CLIENTID));
+    c.useCustomApp     = GetCheck(IDC_CUSTOMAPP);
+    c.customClientId   = util::Trim(GetText(IDC_CLIENTID));
     c.activityType     = (GetSel(IDC_TYPE) == 1) ? 0 : 2;
     c.statusDisplay    = std::max(0, std::min(2, GetSel(IDC_STATUSDISP)));
     c.showTimestamps   = GetCheck(IDC_TIMESTAMPS);
-    c.pausedBehavior   = (GetSel(IDC_PAUSED) == 1) ? 1 : 0;
+    c.pausedBehavior   = (GetSel(IDC_PAUSED) == 0) ? 0 : 1;
     c.clearAfterPaused = std::max(0, GetInt(IDC_PAUSEDMIN, 0));
     c.hideStreams      = GetCheck(IDC_HIDESTREAMS);
     c.excludePaths     = GetText(IDC_EXCLUDE);
@@ -425,8 +441,6 @@ void SettingsPage::Save() {
     c.largeText      = GetText(IDC_LARGETEXT);
     c.smallText      = GetText(IDC_SMALLTEXT);
     c.showSmallIcon  = GetCheck(IDC_SMALLICON);
-    c.playKey        = util::Trim(GetText(IDC_PLAYKEY));
-    c.pauseKey       = util::Trim(GetText(IDC_PAUSEKEY));
     c.barLength      = std::max(4, std::min(30, GetInt(IDC_BARLEN, 12)));
     c.refreshSeconds = std::max(5, GetInt(IDC_REFRESH, 15));
 
@@ -446,14 +460,10 @@ void SettingsPage::Save() {
     c.srcDiscogs     = GetCheck(IDC_DISCOGS);
     c.discogsToken   = util::Trim(GetText(IDC_DISCOGSTOKEN));
     c.srcMusicBrainz = GetCheck(IDC_MUSICBRAINZ);
-    c.fallbackKey   = util::Trim(GetText(IDC_FALLBACK));
 
-    c.btn1Enabled = GetCheck(IDC_BTN1);
-    c.btn1Label   = GetText(IDC_BTN1LABEL);
-    c.btn1Url     = GetText(IDC_BTN1URL);
-    c.btn2Enabled = GetCheck(IDC_BTN2);
-    c.btn2Label   = GetText(IDC_BTN2LABEL);
-    c.btn2Url     = GetText(IDC_BTN2URL);
+    c.titleLink       = GetCheck(IDC_TITLELINK);
+    c.titleLinkCustom = GetCheck(IDC_TITLELINKCUSTOM);
+    c.titleLinkUrl    = util::Trim(GetText(IDC_TITLELINKURL));
 
     config::Set(c);
     Worker().Refresh();

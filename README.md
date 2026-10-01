@@ -2,6 +2,8 @@
 
 Discord Rich Presence plugin for AIMP 5 and 6 (64-bit) with its own settings tab inside AIMP's options dialog.
 
+Author: **Fl4sh**
+
 ## Features
 
 - Track title / artist / album on your Discord profile, **native progress bar** ("Listening" activity)
@@ -14,6 +16,7 @@ Discord Rich Presence plugin for AIMP 5 and 6 (64-bit) with its own settings tab
 - Text templates with placeholders: `%artist% %title% %album% %albumartist% %genre% %year% %track% %filename% %ext% %pos% %dur% %percent% %bar% %status%`
 - Optional text progress bar (`%bar%`) for the "Playing" activity type
 - Play/pause small icon, paused behaviour (show / clear / clear after N minutes)
+- PreMiD friendly: while AIMP is paused its presence is hidden, so your browser activity (PreMiD) is shown instead
 - Clickable song title: opens a YouTube search for artist + title (own link optional)
 - Works out of the box - no Discord application or key needed
 - Hide for streams or for paths containing given text

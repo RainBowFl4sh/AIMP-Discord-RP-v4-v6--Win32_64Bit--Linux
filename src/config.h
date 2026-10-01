@@ -2,21 +2,32 @@
 #pragma once
 #include <string>
 
+// Built-in defaults shared by every user (never shown in the UI)
+inline const wchar_t* const kDefaultClientId  = L"1555109720807702559";   // Discord application "AIMP"
+inline const wchar_t* const kDefaultTitleLink = L"https://www.youtube.com/results?search_query=%artist%+%title%";
+
 struct Config {
     // --- General ---
     bool         enabled          = true;
-    std::wstring clientId = L"1555109720807702559";  // Discord application ID ("AIMP")
+    bool         useCustomApp     = false;       // advanced: use an own Discord application
+    std::wstring customClientId;
+    std::wstring clientId = kDefaultClientId;    // effective ID (computed, not stored)
     int          activityType     = 2;           // 2 = Listening (progress bar), 0 = Playing
     int          statusDisplay    = 1;           // 0 = app name, 1 = state line (artist), 2 = details line (title)
     bool         showTimestamps   = true;        // progress bar / elapsed time
-    int          pausedBehavior   = 0;           // 0 = show "Paused", 1 = clear presence
+    int          pausedBehavior   = 1;           // 0 = show "Paused", 1 = clear presence (lets PreMiD etc. show)
     int          clearAfterPaused = 0;           // minutes, 0 = never
     bool         hideStreams      = false;
     std::wstring excludePaths;                   // ';' separated substrings
 
     // --- Text ---
     std::wstring details   = L"%title%";
-    std::wstring state     = L"%artist%";
+    std::wstring state     = L"by %artist%";
+    // clickable song title (Discord opens the link when someone clicks the title)
+    bool         titleLink       = true;
+    bool         titleLinkCustom = false;        // override the default YouTube search
+    std::wstring titleLinkUrl    = kDefaultTitleLink;
+    std::wstring detailsUrl, stateUrl;           // effective links (computed, not stored)
     std::wstring largeText = L"%album%";
     std::wstring smallText = L"%status%";
     bool         showSmallIcon = true;

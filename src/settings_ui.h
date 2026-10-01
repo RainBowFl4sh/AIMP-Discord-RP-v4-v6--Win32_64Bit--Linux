@@ -28,6 +28,7 @@ private:
     void BuildCover(HWND page);
     void BuildButtons(HWND page);
     void BuildSources(HWND page);
+    void UpdateEnabled();
     void Layout();
     void ShowPage(int index);
     void UpdateStatus();

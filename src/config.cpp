@@ -44,10 +44,30 @@ std::wstring DataDir() {
     return dir;
 }
 
+// fills the computed fields (effective client ID / title link) from the user-facing options
+static void Resolve(Config& c) {
+    c.clientId = (c.useCustomApp && !c.customClientId.empty()) ? c.customClientId : std::wstring(kDefaultClientId);
+    if (!c.titleLink)                                   c.detailsUrl.clear();
+    else if (c.titleLinkCustom && !c.titleLinkUrl.empty()) c.detailsUrl = c.titleLinkUrl;
+    else                                                c.detailsUrl = kDefaultTitleLink;
+    c.stateUrl.clear();
+    // fixed asset keys / no buttons: these are not user settings any more
+    c.playKey = L"play"; c.pauseKey = L"pause"; c.fallbackKey = L"aimp";
+    c.btn1Enabled = c.btn2Enabled = false;
+}
+
 void Load() {
     Config c;  // defaults
     c.enabled          = ReadBool(L"Enabled", c.enabled);
-    c.clientId         = util::Trim(ReadStr(L"ClientId", c.clientId));
+    c.customClientId   = util::Trim(ReadStr(L"CustomClientId", L""));
+    c.useCustomApp     = ReadBool(L"UseCustomApp", false);
+    {   // migrate an own ID from older versions
+        std::wstring old = util::Trim(ReadStr(L"ClientId", L""));
+        if (c.customClientId.empty() && !old.empty() && old != kDefaultClientId) {
+            c.customClientId = old;
+            c.useCustomApp = true;
+        }
+    }
     c.activityType     = ReadInt(L"ActivityType", c.activityType);
     c.statusDisplay    = ReadInt(L"StatusDisplay", c.statusDisplay);
     c.showTimestamps   = ReadBool(L"ShowTimestamps", c.showTimestamps);
@@ -58,11 +78,16 @@ void Load() {
 
     c.details        = ReadStr(L"Details", c.details);
     c.state          = ReadStr(L"State", c.state);
+    const int cfgVersion = ReadInt(L"ConfigVersion", 1);
+    if (cfgVersion < 2 && c.state == L"%artist%") c.state = L"by %artist%";  // 1.1 default
+    if (cfgVersion < 4 && c.pausedBehavior != 1) c.pausedBehavior = 1;      // 1.3 default: clear while paused (PreMiD wins)
     c.largeText      = ReadStr(L"LargeText", c.largeText);
+    c.titleLink       = ReadBool(L"TitleLink", c.titleLink);
+    c.titleLinkCustom = ReadBool(L"TitleLinkCustom", c.titleLinkCustom);
+    c.titleLinkUrl    = util::Trim(ReadStr(L"TitleLinkUrl", c.titleLinkUrl));
+    if (c.titleLinkUrl.empty()) c.titleLinkUrl = kDefaultTitleLink;
     c.smallText      = ReadStr(L"SmallText", c.smallText);
     c.showSmallIcon  = ReadBool(L"ShowSmallIcon", c.showSmallIcon);
-    c.playKey        = ReadStr(L"PlayKey", c.playKey);
-    c.pauseKey       = ReadStr(L"PauseKey", c.pauseKey);
     c.barLength      = ReadInt(L"BarLength", c.barLength);
     c.refreshSeconds = ReadInt(L"RefreshSeconds", c.refreshSeconds);
 
@@ -86,14 +111,7 @@ void Load() {
     c.spotifyId      = util::Trim(ReadStr(L"SpotifyClientId", c.spotifyId));
     c.spotifySecret  = util::Trim(ReadStr(L"SpotifyClientSecret", c.spotifySecret));
     c.discogsToken   = util::Trim(ReadStr(L"DiscogsToken", c.discogsToken));
-    c.fallbackKey   = util::Trim(ReadStr(L"FallbackKey", c.fallbackKey));
 
-    c.btn1Enabled = ReadBool(L"Button1Enabled", c.btn1Enabled);
-    c.btn1Label   = ReadStr(L"Button1Label", c.btn1Label);
-    c.btn1Url     = ReadStr(L"Button1Url", c.btn1Url);
-    c.btn2Enabled = ReadBool(L"Button2Enabled", c.btn2Enabled);
-    c.btn2Label   = ReadStr(L"Button2Label", c.btn2Label);
-    c.btn2Url     = ReadStr(L"Button2Url", c.btn2Url);
 
     if (c.barLength < 4) c.barLength = 4;
     if (c.barLength > 30) c.barLength = 30;
@@ -101,7 +119,9 @@ void Load() {
     if (c.clearAfterPaused < 0) c.clearAfterPaused = 0;
     if (c.activityType != 0 && c.activityType != 2) c.activityType = 2;
     if (c.statusDisplay < 0 || c.statusDisplay > 2) c.statusDisplay = 1;
+    if (c.pausedBehavior < 0 || c.pausedBehavior > 1) c.pausedBehavior = 1;
 
+    Resolve(c);
     std::lock_guard<std::mutex> lk(g_mutex);
     g_cfg = c;
 }
@@ -111,13 +131,19 @@ Config Get() {
     return g_cfg;
 }
 
-void Set(const Config& c) {
+void Set(const Config& in) {
+    Config c = in;
+    Resolve(c);
     {
         std::lock_guard<std::mutex> lk(g_mutex);
         g_cfg = c;
     }
     WriteBool(L"Enabled", c.enabled);
-    WriteStr(L"ClientId", c.clientId);
+    WriteBool(L"UseCustomApp", c.useCustomApp);
+    WriteStr(L"CustomClientId", c.customClientId);
+    WriteBool(L"TitleLink", c.titleLink);
+    WriteBool(L"TitleLinkCustom", c.titleLinkCustom);
+    WriteStr(L"TitleLinkUrl", c.titleLinkUrl);
     WriteInt(L"ActivityType", c.activityType);
     WriteInt(L"StatusDisplay", c.statusDisplay);
     WriteBool(L"ShowTimestamps", c.showTimestamps);
@@ -128,11 +154,10 @@ void Set(const Config& c) {
 
     WriteStr(L"Details", c.details);
     WriteStr(L"State", c.state);
+    WriteInt(L"ConfigVersion", 4);
     WriteStr(L"LargeText", c.largeText);
     WriteStr(L"SmallText", c.smallText);
     WriteBool(L"ShowSmallIcon", c.showSmallIcon);
-    WriteStr(L"PlayKey", c.playKey);
-    WriteStr(L"PauseKey", c.pauseKey);
     WriteInt(L"BarLength", c.barLength);
     WriteInt(L"RefreshSeconds", c.refreshSeconds);
 
@@ -152,14 +177,7 @@ void Set(const Config& c) {
     WriteStr(L"DiscogsToken", c.discogsToken);
     WriteStr(L"CoverNames", c.coverNames);
     WriteStr(L"ImgurClientId", c.imgurClientId);
-    WriteStr(L"FallbackKey", c.fallbackKey);
 
-    WriteBool(L"Button1Enabled", c.btn1Enabled);
-    WriteStr(L"Button1Label", c.btn1Label);
-    WriteStr(L"Button1Url", c.btn1Url);
-    WriteBool(L"Button2Enabled", c.btn2Enabled);
-    WriteStr(L"Button2Label", c.btn2Label);
-    WriteStr(L"Button2Url", c.btn2Url);
 }
 
 }  // namespace config

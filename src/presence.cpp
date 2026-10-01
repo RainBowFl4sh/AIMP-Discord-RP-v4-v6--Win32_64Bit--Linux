@@ -176,6 +176,21 @@ bool PresenceWorker::BuildActivity(const Config& c, const Snapshot& s, std::stri
     if (!details.empty()) a += ",\"details\":\"" + util::JsonEscape(details) + "\"";
     if (!state.empty())   a += ",\"state\":\"" + util::JsonEscape(state) + "\"";
 
+    // clickable title / artist line (Discord: details_url / state_url, max. 256 chars)
+    auto addLink = [&](const char* key, const std::string& line, const std::wstring& urlT) {
+        if (line.empty() || urlT.empty()) return;
+        std::wstring url = util::Trim(Expand(urlT, v, true));
+        if (url.size() > 256) {  // very long names: fall back to searching the title only
+            Vars shortV = v;
+            shortV[L"artist"] = L"";
+            url = util::Trim(Expand(urlT, shortV, true));
+        }
+        if (!IsHttpUrl(url) || url.size() > 256) return;
+        a += std::string(",\"") + key + "\":\"" + util::JsonEscape(util::ToUtf8(url)) + "\"";
+    };
+    addLink("details_url", details, c.detailsUrl);
+    addLink("state_url", state, c.stateUrl);
+
     // progress bar (Listening/Watching) or elapsed counter (Playing)
     if (c.showTimestamps && playing) {
         long long nowUnix = (long long)time(nullptr);

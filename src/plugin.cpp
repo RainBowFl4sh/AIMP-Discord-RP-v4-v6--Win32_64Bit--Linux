@@ -130,7 +130,7 @@ public:
     PWCHAR WINAPI InfoGet(int index) override {
         switch (index) {
             case AIMP_PLUGIN_INFO_NAME:              return const_cast<PWCHAR>(kPluginName);
-            case AIMP_PLUGIN_INFO_AUTHOR:            return const_cast<PWCHAR>(L"Community");
+            case AIMP_PLUGIN_INFO_AUTHOR:            return const_cast<PWCHAR>(L"Fl4sh");
             case AIMP_PLUGIN_INFO_SHORT_DESCRIPTION: return const_cast<PWCHAR>(L"Discord Rich Presence with progress bar and cover art");
             default:                                 return nullptr;
         }
