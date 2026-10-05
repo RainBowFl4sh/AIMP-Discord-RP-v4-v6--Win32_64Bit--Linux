@@ -77,6 +77,16 @@ inline IAIMPString* MakeString(IAIMPCore* core, const std::wstring& text) {
     return s;
 }
 
+// AIMP's version as major * 100 + minor (e.g. 540 for 5.40), 0 when AIMP does not say
+inline int Version(IAIMPCore* core) {
+    IAIMPServiceVersionInfo* info = nullptr;
+    if (!core || FAILED(core->QueryInterface(IID_IAIMPServiceVersionInfo, reinterpret_cast<void**>(&info))) || !info)
+        return 0;
+    const int v = info->GetVersionID();   // e.g. 4700 for 4.70, 5400 for 5.40
+    info->Release();
+    return v >= 1000 ? v / 10 : (v > 0 ? v : 0);
+}
+
 inline std::wstring PropString(IAIMPPropertyList* pl, int id) {
     ComPtr<IAIMPString> s;
     if (pl && SUCCEEDED(pl->GetValueAsObject(id, IID_IAIMPString, s.putVoid())) && s) return StringOf(s.get());

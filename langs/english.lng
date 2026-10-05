@@ -1,0 +1,193 @@
+; Discord Rich Presence for AIMP - English texts (the reference for all other languages)
+;
+; New language: copy this file to "Langs\<language>.lng" in the plugin folder (next to aimp_discord_rpc.dll),
+; set Name / Code / Aliases in [FILE] and translate the texts after "=". %1 and %2 are filled in by the plugin.
+; Aliases: words that identify AIMP's language of the same name (file name, English / own name, code, LCID).
+; A file with the Code of a built-in language (en, de, ru, uk) corrects single texts of that language.
+[FILE]
+Name=English
+Code=en
+Aliases=english;eng;en;1033
+
+[DiscordRPC]
+Tab.General=General
+Tab.Display=Display
+Tab.Cover=Cover art
+Tab.Sources=Sources
+Tab.Advanced=Advanced
+Tab.About=About
+
+Gen.Enable=Enable Discord Rich Presence
+Gen.ActivityType=Activity type:
+Gen.TypeListening=Listening (shows a progress bar)
+Gen.TypePlaying=Playing (elapsed time only)
+Gen.StatusText=Discord status text shows:
+Gen.StatusApp=Application name (AIMP)
+Gen.StatusState=Artist (second line)
+Gen.StatusDetails=Track title (first line)
+Gen.Timestamps=Show progress bar / elapsed time
+Gen.Paused=When paused:
+Gen.PausedShow=Show "Paused" status
+Gen.PausedHide=Hide (PreMiD / other activity shows)
+Gen.ClearAfter=Remove the presence after a pause of (min, 0 = never):
+Gen.HideStreams=Hide presence for internet radio / streams
+Gen.ExcludePaths=Hide presence when the file path contains (separate with ;):
+Gen.Status=Status: %1
+
+Disp.Details=First line:
+Disp.State=Second line:
+Disp.LargeText=Cover tooltip:
+Disp.SmallText=Icon tooltip:
+Disp.SmallIcon=Show play / pause icon (small image)
+Disp.BarLength=Length of %bar%:
+Disp.Refresh=Refresh every (s):
+Disp.Placeholders=Placeholders: %artist% %title% %album% %albumartist% %genre% %year% %track% %playlist% %filename% %ext% %pos% %dur% %percent% %bar% %status%
+Disp.TitleLink=Clickable song title (YouTube search for artist + title)
+Disp.OwnLink=Own link:
+
+Cov.Enable=Show album cover in Discord
+Cov.Info=Discord only shows covers that have a public URL. The cover of your file can be uploaded (x0.at needs no account) or looked up online (see "Sources"). Every cover is resolved once and cached.
+Cov.Embedded=Cover in the tags (MP3 / FLAC / M4A)
+Cov.Folder=Image in the track's folder
+Cov.FolderNames=File names (;):
+Cov.Upload=Upload covers to:
+Cov.UploadOff=Off (online lookup only)
+Cov.UploadCatbox=catbox.moe (no account)
+Cov.UploadImgur=Imgur (Client-ID)
+Cov.UploadX0=x0.at (no account)
+Cov.ImgurId=Imgur Client-ID:
+Cov.GetImgurId=Get ID
+Cov.PreferLocal=Prefer the file's own cover
+Cov.PublicNote=Uploaded covers can be seen by anyone who has the link.
+Cov.ClearCache=Clear cover cache
+Cov.Cleared=Cover cache cleared.
+Cov.Current=Current cover:
+Cov.OpenImage=Open image
+Cov.Off=Covers are switched off – Discord shows the AIMP logo.
+Cov.Nothing=Nothing is playing.
+Cov.Searching=Looking for a cover…
+Cov.None=No cover found – Discord shows the AIMP logo.
+Cov.Source=Source: %1
+Cov.SrcCache=cover cache
+Cov.SrcOnline=found on %1
+Cov.SrcEmbedded=from the file's tags
+Cov.SrcFolder=image in the track's folder
+Cov.SrcUploaded=%1, uploaded to %2
+
+Src.Info=Online lookups search the artist / album and use the public image URL directly – nothing is uploaded. Sources are tried top to bottom, the first hit wins.
+Src.Spotify=Spotify (needs a free developer app)
+Src.CreateApp=Create app
+Src.ClientId=Client ID:
+Src.ClientSecret=Client Secret:
+Src.Deezer=Deezer (no key)
+Src.Itunes=Apple Music / iTunes (no key)
+Src.Bandcamp=Bandcamp (no key, unofficial endpoint)
+Src.Discogs=Discogs (needs a free personal access token)
+Src.GetToken=Get token
+Src.Token=Token:
+Src.MusicBrainz=MusicBrainz + Cover Art Archive (no key)
+
+Adv.Test=Send test presence
+Adv.TestSent=Test shown for 15 seconds.
+Adv.Reconnect=Reconnect
+Adv.Reconnecting=Reconnecting…
+Adv.Reconnected=Connected.
+Adv.LastUpdate=Last update: %1
+Adv.Channel=Channel: %1
+Adv.NoChannel=–
+Adv.AppInUse=Application ID: %1 (%2)
+Adv.AppBuiltin=built-in "AIMP"
+Adv.AppOwn=your own application
+Adv.Log=Recent log:
+Adv.ExcludePlaylists=Hide in playlists containing (;):
+Adv.Language=Language:
+Adv.LangAuto=Automatic (AIMP: %1)
+Adv.LangAutoUnknown=Automatic (AIMP's language)
+Adv.CustomApp=Use my own Discord application
+Adv.AppId=Application ID:
+Adv.Portal=Developer Portal
+Adv.SettingsFile=Settings file:
+Adv.Export=Export…
+Adv.Import=Import…
+Adv.OpenFolder=Open folder
+Adv.ExportTitle=Export settings
+Adv.ImportTitle=Import settings
+Adv.FileType=Settings
+Adv.Exported=Saved: %1
+Adv.ExportFailed=Could not write %1
+Adv.Imported=Imported: %1
+Adv.ImportFailed=%1 does not contain settings of this plugin.
+
+About.Title=Discord Rich Presence for AIMP
+About.Version=Version %1 – %2
+About.Author=by Fl4sh (RainBowFl4sh on GitHub)
+About.GitHub=GitHub page
+About.Releases=All releases
+About.Issues=Report a problem
+About.UpdateCheck=Check for updates:
+About.CheckNow=Check now
+About.UpdateAuto=Install updates automatically
+About.Install=Install %1
+About.WhatsNew=What's new?
+About.ShowFile=Show file
+About.Changelog=Changelog:
+About.AiNote=Note: the Russian and Ukrainian translations were made with the help of AI and may contain mistakes. Corrections are welcome on GitHub ("Report a problem").
+About.ChangelogVersion=Version %1
+About.Installed=(installed)
+
+Upd.EveryStart=at every AIMP start
+Upd.Daily=once a day
+Upd.Weekly=once a week
+Upd.Monthly=once a month
+Upd.Never=Not checked yet.
+Upd.Checking=Checking for updates…
+Upd.Latest=You have the latest version (last check: %1).
+Upd.Available=Version %1 is available.
+Upd.Downloading=Downloading version %1…
+Upd.Opened=Version %1 was handed to AIMP – AIMP installs it, then it is restarted to load it.
+Upd.Installed=Discord Rich Presence was updated to version %1.
+Upd.Restarting=Version %1 is installed – AIMP restarts now.
+Upd.RestartManual=Version %1 is installed – restart AIMP to use it.
+Upd.Failed=Update failed: %1
+Upd.Http=GitHub answered with error %1
+Upd.Offline=no connection to GitHub
+Upd.NoRelease=no release published yet
+Upd.NoVersion=the newest release has no version number
+Upd.NoPackage=the release has no .aimppack file
+Upd.Damaged=the download is damaged (checksum mismatch)
+Upd.WriteFailed=could not save %1
+Upd.OpenFailed=AIMP could not be started – open this file in AIMP: %1
+Upd.Notify=Discord Rich Presence %1 is available (Preferences – Plugins – Discord Rich Presence – About)
+
+St.Waiting=waiting…
+St.Disabled=disabled
+St.Connected=connected to Discord
+St.ConnectedAs=connected to Discord as %1
+St.Testing=test presence is shown
+St.NotRunning=Discord is not running (retrying every 5 s)
+St.NoAnswer=Discord does not answer (retrying every 5 s)
+St.Rejected=Discord rejected the application ID%1
+St.Closed=Discord closed the connection%1 – reconnecting
+
+Prev.Listening=Listening to %1
+Prev.Playing=Playing %1
+Prev.Elapsed=%1 elapsed
+Prev.YourApp=your app
+Prev.You=You
+Prev.IconTip=Icon: %1
+Prev.Link=Link: %1
+Prev.NoLink=Title without link
+Prev.Example=Example – nothing is playing right now.
+Prev.HiddenDisabled=The plugin is switched off – Discord shows nothing.
+Prev.HiddenStopped=Nothing is playing – Discord shows nothing.
+Prev.HiddenStream=Internet radio / streams are hidden (General tab) – Discord shows nothing.
+Prev.HiddenPath=This file is hidden by the path filter (General tab) – Discord shows nothing.
+Prev.HiddenPlaylist=This playlist is hidden (Advanced tab) – Discord shows nothing.
+Prev.HiddenPaused=Playback is paused and "Hide" is selected (General tab): Discord shows your other activities, e.g. PreMiD.
+Prev.HiddenTimeout=Paused for longer than set on the General tab – the presence was removed.
+
+Status.Playing=Playing
+Status.Paused=Paused
+Test.Details=Discord Rich Presence for AIMP
+Test.State=Test – the connection works!
+Test.Small=Test

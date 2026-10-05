@@ -629,7 +629,13 @@ static const GUID IID_IAIMPUIWinControl = {0x61756957, 0x696E, 0x4374, 0x72, 0x6
   class IAIMPUIDrawEvents: public IUnknown
   {
 		public:
+			// Delphi: "const R: TRect". On Windows AIMP passes a pointer to the rectangle (by value only in AIMP for
+			// Linux, built with Lazarus); declaring it by value broke 32-bit AIMP: a wrong rectangle, an unbalanced stack.
+#ifdef _WIN32
+			virtual void WINAPI OnDraw(IUnknown* Sender, HCANVAS Canvas, const RECT& R) = 0;
+#else
 			virtual void WINAPI OnDraw(IUnknown* Sender, HCANVAS Canvas, const RECT R) = 0;
+#endif
   };
 
   /* IAIMPUIKeyboardEvents */

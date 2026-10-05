@@ -1,5 +1,114 @@
 # Changelog
 
+## 1.5.3
+
+### New
+- **AIMP 4 and AIMP 3**: the plugin now also supports AIMP 4 - fully, with the settings tab, `.aimppack` installation
+  and automatic updates - and, slightly limited, AIMP 3: the presence works, but AIMP 3 has no settings pages and
+  cannot install packages, so the plugin is installed by hand and set up in `DiscordRPC.ini`
+- **x0.at** as upload host for local covers (no account) - the new default. catbox.moe currently answers uploads
+  without an account with nothing, and files uploaded with an account are delivered empty (0 bytes)
+- Every uploaded cover is checked before Discord gets the link. If the host fails or delivers nothing, the next
+  one stands in (x0.at / catbox.moe) and the failed host is skipped for 30 minutes
+- Uploaded covers older than 3 days are checked once per AIMP session; when the host has deleted the file, the
+  cover is uploaded / looked up again
+
+- **Covers in Discord are checked**: Discord loads covers through its own media proxy and sometimes shows a "?"
+  instead (it then remembers that for the link). A few seconds after sending, the plugin checks Discord's copy of
+  the cover. If Discord cannot load it, the same picture is sent again under a new link (up to 2 times), then the
+  cover is uploaded / looked up again, and if nothing helps the AIMP logo is shown instead of the "?"
+- **Update check**: only the release's `.aimppack` is used (with several, the one named after the plugin). AIMP
+  installs it, and as soon as the new plugin file is in place the plugin restarts AIMP so it is loaded (by itself
+  AIMP only offers "Restart now"). After the restart the plugin shows "Discord Rich Presence was updated to version
+  ..." once
+
+### Changed
+- Settings, cover cache and downloads are kept in **AIMP's profile folder**, as the AIMP plugin rules ask. That is
+  the same folder as before (`%APPDATA%\AIMP`, Linux `~/.config/AIMP`), except for a portable AIMP: there it is now
+  `AIMP\Profile`, and the settings are taken over from the old location once
+- Russian / Ukrainian: the *About* tab notes that these translations were made with the help of AI
+- Settings that still use catbox.moe (the old default) are switched to x0.at once; catbox.moe can still be chosen
+  on the *Cover art* tab
+
+### Fixed
+- 32-bit AIMP: the live preview (*Display* tab) and the author picture (*About* tab) stayed empty. AIMP passes the
+  drawing area by reference, the SDK's C++ header declared it by value
+- AIMP 4.70: closing the preferences showed "Invalid pointer operation" (AIMP 4 frees the settings page itself)
+- Windows: "Import..." no longer changes AIMP's current folder
+
+## 1.5.2
+
+### Fixed
+- *Advanced* tab: "Export..." and "Import..." did nothing on Windows - no file dialog appeared. They now open the
+  usual Windows "Save as" / "Open" dialog (in the plugin's data folder, with a suggested file name)
+- catbox.moe upload ("HTTP 200: no answer"): an upload is no longer redirected. Likely cause: Windows turns a
+  redirected upload into an empty request, which catbox answers with nothing. The request now also matches catbox's own example
+  (`userhash` field, `Accept` header). If an upload still fails, the log shows the HTTP status, the size sent and
+  what the server reported (redirect target, server, length), and the cover is looked up online as before
+
+## 1.5.1
+
+### New
+- *Cover art* tab: a "Get ID" link next to the Imgur Client-ID field opens the Imgur page where you register an
+  application and get your Client-ID
+- The changelog on the *About* tab is shown in the plugin's language (English, German, Russian or Ukrainian)
+
+### Changed
+- *About* tab: the author picture has rounded corners
+
+### Fixed
+- Some fields and buttons were cut off at the right edge of the settings page (e.g. "Check now" and the edit fields
+  on the *General* and *Advanced* tabs). All tabs now keep a margin on the right
+- *Advanced* tab: "Reconnecting..." stayed on the page after the reconnect had finished. It now shows "Connected."
+  as soon as the connection is back, and the note disappears after a few seconds (also for "Send test presence")
+- The log no longer repeats the "Language: ..." line
+- catbox.moe upload: when it fails, the log now shows what catbox answered, so the cause can be found
+
+## 1.5.0
+
+### New
+- **About tab**: author, links to GitHub (releases, report a problem) and the complete changelog - the installed
+  version always on top
+- **Update check**: looks for a new release on GitHub - at every AIMP start, once a day, once a week or once a month
+  (or switched off). New versions are downloaded, checked (SHA-256) and opened in AIMP, which installs them; a new
+  version is opened automatically only once. "Check now" and "Install" buttons on the About tab
+- **Live preview** on the *Display* tab: shows what Discord will show - the activity card with cover, play / pause
+  icon, texts and progress bar, and your entry in the member list - while you type, before you press "Apply".
+  When nothing plays an example track is shown; when the presence is hidden the preview tells why
+- **Cover preview** on the *Cover art* tab: the current cover and where it comes from (file tags, folder image,
+  Deezer, iTunes, ...), with a link to the image
+- **Advanced tab**: connection details (channel, application ID, last update), "Send test presence", "Reconnect",
+  the recent log, hide the presence for certain playlists, choose the language, export / import the settings.
+  The own-Discord-application option moved here
+- **Languages**: the plugin follows AIMP's interface language - English, German, Russian and Ukrainian are built
+  in; the language can also be chosen on the *Advanced* tab. More languages can be added as `Langs\<name>.lng`
+  files without a new build
+- New placeholder `%playlist%` (name of the playlist the track was started from)
+
+### Changed
+- The *Links* tab is part of the *Display* tab now (6 tabs: General, Display, Cover art, Sources, Advanced, About)
+- `%status%` ("Playing" / "Paused") is shown in the plugin's language
+- Windows: the settings file is saved as Unicode (UTF-16) - texts in any language (e.g. Cyrillic in your own
+  lines or filters) are kept correctly. Old files are converted automatically
+
+### Fixed
+- **Linux**: the plugin now runs on practically every distribution of the last ten years (glibc 2.17 or newer:
+  Ubuntu 18.04+, Debian 9+, Mint, Fedora, Arch, ...). Earlier builds could need a very new glibc (up to 2.38, e.g.
+  Ubuntu 24.04) and then did not load
+- Linux: the plugin no longer exports its built-in C++ library to AIMP (only its entry point)
+- Leaving AIMP could take several seconds while a cover was being looked up online - running downloads are now
+  cancelled at once
+
+### Under the hood
+- Less than half the file size of 1.4.1 (Windows x64: 0.5 MB instead of 1.3 MB, Linux: 0.55 MB instead of 1.8 MB)
+  and fewer CPU wake-ups: optimized for size, no iostreams / filesystem library, the background threads only wake
+  up when there is work
+- One settings reader / writer for Windows and Linux; hand edits of the INI file are picked up while AIMP runs on
+  both systems
+- The tests now also cover the update check (fake GitHub server), the previews (rendered to images), the language
+  switch, export / import, the test presence, reconnect and the playlist filter - on Linux and on both Windows
+  builds under Wine
+
 ## 1.4.1
 
 ### Fixed

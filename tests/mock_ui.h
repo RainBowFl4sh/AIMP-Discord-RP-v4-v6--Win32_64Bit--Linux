@@ -31,28 +31,49 @@ struct Registry;
 template <class I>
 class Ctl : public I {
 public:
-    Ctl(Registry* reg, const TStr& kind, const TStr& name, IUnknown* events)
-        : kind(kind), name(name), reg_(reg), events_(events) {
+    Ctl(Registry* reg, const TStr& kind, const TStr& name, IUnknown* events, void* parent = nullptr)
+        : kind(kind), name(name), parent(parent), reg_(reg), events_(events) {
         if (events_) events_->AddRef();
     }
-    virtual ~Ctl() { if (events_) events_->Release(); }
+    virtual ~Ctl() {
+        if (events_) events_->Release();
+        for (auto& kv : objs) kv.second->Release();
+    }
 
     TStr kind, name;
+    void* parent;                    // the control it was created on (tab sheet)
     std::map<int, long long> ints;
     std::map<int, TStr> strs;
-    std::vector<TStr> items;   // combo box items
+    std::map<int, IUnknown*> objs;   // object properties (e.g. the picture of an image control)
+    std::vector<TStr> items;         // combo box items
+    std::vector<TStr> lines;         // memo lines (AddLine)
     RECT bounds = {0, 0, 0, 0};
     RECT anchors = {0, 0, 0, 0};
     int alignment = 0;
     bool placed = false;
+    int invalidated = 0;
 
-    // test helper: what a user action would trigger
+    // test helpers: what a user action / AIMP would trigger
     void FireChanged() {
         IAIMPUIChangeEvents* e = nullptr;
         if (events_ && events_->QueryInterface(IID_IAIMPUIChangeEvents, reinterpret_cast<void**>(&e)) == S_OK && e) {
             e->OnChanged(static_cast<I*>(this));
             e->Release();
         }
+    }
+    bool Paint(HCANVAS canvas, const RECT& r) {
+        IAIMPUIDrawEvents* e = nullptr;
+        if (!events_ || events_->QueryInterface(IID_IAIMPUIDrawEvents, reinterpret_cast<void**>(&e)) != S_OK || !e)
+            return false;
+#ifdef _WIN32
+        // exactly like AIMP (Delphi "const R: TRect"), whatever the C++ header says: the rectangle by reference
+        typedef void(WINAPI * DrawFn)(IAIMPUIDrawEvents*, IUnknown*, HCANVAS, const RECT*);
+        reinterpret_cast<DrawFn>((*reinterpret_cast<void***>(e))[3])(e, static_cast<I*>(this), canvas, &r);
+#else
+        e->OnDraw(static_cast<I*>(this), canvas, r);   // AIMP for Linux (Lazarus, x86_64): by value
+#endif
+        e->Release();
+        return true;
     }
 
     // IUnknown
@@ -95,7 +116,20 @@ public:
     HRESULT WINAPI SetValueAsFloat(INT32 id, const DOUBLE v) override { ints[id] = (long long)v; return S_OK; }
     HRESULT WINAPI SetValueAsInt32(INT32 id, INT32 v) override { ints[id] = v; return S_OK; }
     HRESULT WINAPI SetValueAsInt64(INT32 id, const INT64 v) override { ints[id] = v; return S_OK; }
-    HRESULT WINAPI SetValueAsObject(INT32 id, IUnknown* v) override { strs[id] = StrOf(v); return S_OK; }
+    HRESULT WINAPI SetValueAsObject(INT32 id, IUnknown* v) override {
+        IAIMPString* s = nullptr;
+        if (v && v->QueryInterface(IID_IAIMPString, reinterpret_cast<void**>(&s)) == S_OK && s) {
+            s->Release();
+            strs[id] = StrOf(v);
+            return S_OK;
+        }
+        if (v) v->AddRef();
+        auto old = objs.find(id);
+        if (old != objs.end()) old->second->Release();
+        if (v) objs[id] = v;
+        else objs.erase(id);
+        return S_OK;
+    }
 
     // IAIMPUIControl
     HRESULT WINAPI GetPlacement(TAIMPUIControlPlacement* p) override { *p = {}; p->Bounds = bounds; return S_OK; }
@@ -111,7 +145,7 @@ public:
     HRESULT WINAPI ClientToScreen(POINT*) override { return S_OK; }
     HRESULT WINAPI ScreenToClient(POINT*) override { return S_OK; }
     HRESULT WINAPI PaintTo(HCANVAS, INT32, INT32) override { return S_OK; }
-    HRESULT WINAPI Invalidate() override { return S_OK; }
+    HRESULT WINAPI Invalidate() override { ++invalidated; return S_OK; }
 
     // IAIMPUIWinControl
     virtual HRESULT WINAPI GetControl(INT32, CONSTIID, void**) { return E_NOTIMPL; }
@@ -135,11 +169,23 @@ public:
     // IAIMPUIBaseComboBox
     virtual HRESULT WINAPI Add(IUnknown* obj, INT32) { items.push_back(StrOf(obj)); return S_OK; }
     virtual HRESULT WINAPI Add2(IAIMPObjectList*) { return E_NOTIMPL; }
-    virtual HRESULT WINAPI Clear() { items.clear(); return S_OK; }
+    virtual HRESULT WINAPI Clear() { items.clear(); lines.clear(); return S_OK; }   // (memo too)
     virtual HRESULT WINAPI Delete(INT32) { return E_NOTIMPL; }
     virtual HRESULT WINAPI GetItem(INT32, CONSTIID, void**) { return E_NOTIMPL; }
     virtual INT32 WINAPI GetItemCount() { return (INT32)items.size(); }
     virtual HRESULT WINAPI SetItem(INT32, IUnknown*) { return E_NOTIMPL; }
+
+    // IAIMPUIMemo
+    virtual HRESULT WINAPI AddLine(IAIMPString* s) { lines.push_back(StrOf(s)); return S_OK; }
+    virtual HRESULT WINAPI DeleteLine(INT32) { return E_NOTIMPL; }
+    virtual HRESULT WINAPI InsertLine(INT32, IAIMPString*) { return E_NOTIMPL; }
+    virtual HRESULT WINAPI GetLine(INT32, IAIMPString*) { return E_NOTIMPL; }
+    virtual INT32 WINAPI GetLineCount() { return (INT32)lines.size(); }
+    virtual HRESULT WINAPI SetLine(INT32, IAIMPString*) { return E_NOTIMPL; }
+    virtual HRESULT WINAPI LoadFromFile(IAIMPString*) { return E_NOTIMPL; }
+    virtual HRESULT WINAPI LoadFromStream(IAIMPStream*) { return E_NOTIMPL; }
+    virtual HRESULT WINAPI SaveToFile(IAIMPString*) { return E_NOTIMPL; }
+    virtual HRESULT WINAPI SaveToStream(IAIMPStream*) { return E_NOTIMPL; }
 
     // IAIMPUIButton
     virtual HRESULT WINAPI ShowDropDownMenu() { return S_OK; }
@@ -168,29 +214,38 @@ private:
 struct Registry {
     std::vector<IUnknown*> objects;
 
-    template <class I>
-    Ctl<I>* Make(const TStr& kind, const TStr& name, IUnknown* events) {
-        Ctl<I>* c = new Ctl<I>(this, kind, name, events);
-        c->AddRef();   // registry reference
-        objects.push_back(static_cast<I*>(c));
-        all.push_back([c]() {
-            return Info{c->kind, c->name, &c->ints, &c->strs, &c->items, [c]() { c->FireChanged(); },
-                        c->placed, c->alignment, c->anchors, c->bounds};
-        });
-        return c;
-    }
-
     struct Info {
         TStr kind, name;
         std::map<int, long long>* ints;
         std::map<int, TStr>* strs;
+        std::map<int, IUnknown*>* objs;
         std::vector<TStr>* items;
+        std::vector<TStr>* lines;
         std::function<void()> fire;
+        std::function<bool(HCANVAS, const RECT&)> paint;
         bool placed;
         int alignment;
         RECT anchors, bounds;
+        int invalidated;
+        void* self;
+        void* parent;
     };
     std::vector<std::function<Info()>> all;
+
+    template <class I>
+    Ctl<I>* Make(const TStr& kind, const TStr& name, IUnknown* events, void* parent = nullptr) {
+        Ctl<I>* c = new Ctl<I>(this, kind, name, events, parent);
+        c->AddRef();   // registry reference
+        objects.push_back(static_cast<I*>(c));
+        all.push_back([c]() {
+            return Info{c->kind,  c->name,  &c->ints, &c->strs, &c->objs, &c->items, &c->lines,
+                        [c]() { c->FireChanged(); },
+                        [c](HCANVAS h, const RECT& r) { return c->Paint(h, r); },
+                        c->placed, c->alignment, c->anchors, c->bounds, c->invalidated,
+                        static_cast<IAIMPUIControl*>(static_cast<I*>(c)), c->parent};
+        });
+        return c;
+    }
 
     ~Registry() {
         for (IUnknown* o : objects) o->Release();
@@ -215,9 +270,33 @@ HRESULT WINAPI Ctl<I>::Add(IAIMPString* name, IAIMPUITabSheet** page) {
     return S_OK;
 }
 
+// file dialogs: the test sets the path the "user" picks
+class FileDialogs final : public IAIMPUIFileDialogs {
+public:
+    TStr pick;        // empty = the user cancels
+    int opened = 0;
+    HRESULT __unknwncall QueryInterface(REFIID, LPVOID* ppv) override { *ppv = nullptr; return E_NOINTERFACE; }
+    DWORD __unknwncall AddRef() override { return 2; }
+    DWORD __unknwncall Release() override { return 1; }   // lives as long as the test
+    HRESULT WINAPI ExecuteOpenDialog(HWND, IAIMPString*, IAIMPString*, IAIMPString** name) override { return Answer(name); }
+    HRESULT WINAPI ExecuteOpenDialog2(HWND, IAIMPString*, IAIMPString*, IAIMPObjectList**) override { return E_NOTIMPL; }
+    HRESULT WINAPI ExecuteSaveDialog(HWND, IAIMPString*, IAIMPString*, IAIMPString** name, INT32*) override {
+        return Answer(name);
+    }
+
+private:
+    HRESULT Answer(IAIMPString** name) {
+        ++opened;
+        if (pick.empty()) return E_ABORT;
+        *name = NewString(pick);
+        return S_OK;
+    }
+};
+
 class Service final : public IAIMPServiceUI {
 public:
     Registry reg;
+    FileDialogs dialogs;
     HRESULT __unknwncall QueryInterface(REFIID, LPVOID* ppv) override {
         *ppv = nullptr;
         return E_NOINTERFACE;
@@ -225,16 +304,20 @@ public:
     DWORD __unknwncall AddRef() override { return 2; }
     DWORD __unknwncall Release() override { return 1; }   // lives as long as the test
 
-    HRESULT WINAPI CreateControl(IAIMPUIForm*, IAIMPUIWinControl*, IAIMPString* name, IUnknown* events, CONSTIID iid,
-                                 void** obj) override {
+    HRESULT WINAPI CreateControl(IAIMPUIForm*, IAIMPUIWinControl* parent, IAIMPString* name, IUnknown* events,
+                                 CONSTIID iid, void** obj) override {
         TStr n = StrOf(name);
+        void* pp = static_cast<IAIMPUIControl*>(parent);
         auto is = [&](const GUID& g) { return memcmp(&iid, &g, sizeof(GUID)) == 0; };
-        if (is(IID_IAIMPUILabel))       { *obj = static_cast<IAIMPUILabel*>(reg.Make<IAIMPUILabel>(K("Label"), n, events)); return S_OK; }
-        if (is(IID_IAIMPUICheckBox))    { *obj = static_cast<IAIMPUICheckBox*>(reg.Make<IAIMPUICheckBox>(K("Check"), n, events)); return S_OK; }
-        if (is(IID_IAIMPUIEdit))        { *obj = static_cast<IAIMPUIEdit*>(reg.Make<IAIMPUIEdit>(K("Edit"), n, events)); return S_OK; }
-        if (is(IID_IAIMPUIComboBox))    { *obj = static_cast<IAIMPUIComboBox*>(reg.Make<IAIMPUIComboBox>(K("Combo"), n, events)); return S_OK; }
-        if (is(IID_IAIMPUIButton))      { *obj = static_cast<IAIMPUIButton*>(reg.Make<IAIMPUIButton>(K("Button"), n, events)); return S_OK; }
-        if (is(IID_IAIMPUIPageControl)) { *obj = static_cast<IAIMPUIPageControl*>(reg.Make<IAIMPUIPageControl>(K("Tabs"), n, events)); return S_OK; }
+        if (is(IID_IAIMPUILabel))       { *obj = static_cast<IAIMPUILabel*>(reg.Make<IAIMPUILabel>(K("Label"), n, events, pp)); return S_OK; }
+        if (is(IID_IAIMPUICheckBox))    { *obj = static_cast<IAIMPUICheckBox*>(reg.Make<IAIMPUICheckBox>(K("Check"), n, events, pp)); return S_OK; }
+        if (is(IID_IAIMPUIEdit))        { *obj = static_cast<IAIMPUIEdit*>(reg.Make<IAIMPUIEdit>(K("Edit"), n, events, pp)); return S_OK; }
+        if (is(IID_IAIMPUIComboBox))    { *obj = static_cast<IAIMPUIComboBox*>(reg.Make<IAIMPUIComboBox>(K("Combo"), n, events, pp)); return S_OK; }
+        if (is(IID_IAIMPUIButton))      { *obj = static_cast<IAIMPUIButton*>(reg.Make<IAIMPUIButton>(K("Button"), n, events, pp)); return S_OK; }
+        if (is(IID_IAIMPUIPageControl)) { *obj = static_cast<IAIMPUIPageControl*>(reg.Make<IAIMPUIPageControl>(K("Tabs"), n, events, pp)); return S_OK; }
+        if (is(IID_IAIMPUIMemo))        { *obj = static_cast<IAIMPUIMemo*>(reg.Make<IAIMPUIMemo>(K("Memo"), n, events, pp)); return S_OK; }
+        if (is(IID_IAIMPUIImage))       { *obj = static_cast<IAIMPUIImage*>(reg.Make<IAIMPUIImage>(K("Image"), n, events, pp)); return S_OK; }
+        if (is(IID_IAIMPUIPaintBox))    { *obj = static_cast<IAIMPUIPaintBox*>(reg.Make<IAIMPUIPaintBox>(K("Paint"), n, events, pp)); return S_OK; }
         return E_NOTIMPL;
     }
     HRESULT WINAPI CreateForm(HWND, DWORD, IAIMPString* name, IUnknown* events, IAIMPUIForm** form) override {
@@ -243,7 +326,11 @@ public:
         *form = f;
         return S_OK;
     }
-    HRESULT WINAPI CreateObject(IAIMPUIForm*, IUnknown*, CONSTIID, void**) override { return E_NOTIMPL; }
+    HRESULT WINAPI CreateObject(IAIMPUIForm*, IUnknown*, CONSTIID iid, void** obj) override {
+        if (memcmp(&iid, &IID_IAIMPUIFileDialogs, sizeof(GUID)) != 0) return E_NOTIMPL;
+        *obj = static_cast<IAIMPUIFileDialogs*>(&dialogs);
+        return S_OK;
+    }
 
     Ctl<IAIMPUIForm>* lastForm = nullptr;
 

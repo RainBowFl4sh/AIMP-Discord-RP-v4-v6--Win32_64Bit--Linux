@@ -4,9 +4,10 @@
 #include <cmath>
 #include <ctime>
 #include <map>
-#include <vector>
 
+#include "i18n.h"
 #include "util.h"
+#include "version.h"
 
 namespace {
 
@@ -37,7 +38,7 @@ std::wstring MakeBar(double fraction, int length) {
     fraction = std::min(1.0, std::max(0.0, fraction));
     int filled = (int)std::floor(fraction * length + 0.5);
     std::wstring bar;
-    for (int i = 0; i < length; ++i) bar += (i < filled) ? L"\u25B0" : L"\u25B1";
+    for (int i = 0; i < length; ++i) bar += (i < filled) ? L"▰" : L"▱";
     return bar;
 }
 
@@ -66,7 +67,73 @@ bool NeedsPeriodicRefresh(const Config& c) {
     return false;
 }
 
+std::string Quote(const std::string& s) { return "\"" + util::JsonEscape(s) + "\""; }
+
 }  // namespace
+
+bool PresenceStatus::operator==(const PresenceStatus& o) const {
+    return kind == o.kind && error == o.error && errorDetail == o.errorDetail && endpoint == o.endpoint &&
+           user.id == o.user.id && user.name == o.user.name && user.avatar == o.user.avatar &&
+           user.globalName == o.user.globalName && clientId == o.clientId && lastSent == o.lastSent && connects == o.connects &&
+           visible == o.visible && testing == o.testing && coverUrl == o.coverUrl && coverSource == o.coverSource &&
+           coverSearching == o.coverSearching;
+}
+
+ActivityTexts ComputeTexts(const Config& c, const Snapshot& s, clock_t_::duration pausedFor) {
+    ActivityTexts t;
+    const bool playing = s.state == PlayState::Playing;
+    if (!c.enabled)                                                     t.hidden = Hidden::Disabled;
+    else if (s.state == PlayState::Stopped || (s.track.fileName.empty() && s.track.title.empty())) t.hidden = Hidden::Stopped;
+    else if (c.hideStreams && util::IsUrl(s.track.fileName))            t.hidden = Hidden::Stream;
+    else if (util::MatchesAny(s.track.fileName, c.excludePaths))        t.hidden = Hidden::PathFilter;
+    else if (util::MatchesAny(s.track.playlist, c.excludePlaylists))    t.hidden = Hidden::PlaylistFilter;
+    else if (!playing && c.pausedBehavior == 1)                         t.hidden = Hidden::Paused;
+    else if (!playing && c.clearAfterPaused > 0 && pausedFor >= std::chrono::minutes(c.clearAfterPaused))
+        t.hidden = Hidden::PausedTimeout;
+
+    double pos = s.position;
+    if (playing) pos += std::chrono::duration<double>(clock_t_::now() - s.stamp).count();
+    if (s.duration > 0 && pos > s.duration) pos = s.duration;
+    if (pos < 0) pos = 0;
+    t.playing = playing;
+    t.pos = pos;
+    t.dur = s.duration;
+
+    Vars v;
+    v[L"artist"]      = s.track.artist;
+    v[L"albumartist"] = s.track.albumArtist.empty() ? s.track.artist : s.track.albumArtist;
+    v[L"title"]       = s.track.title;
+    v[L"album"]       = s.track.album;
+    v[L"genre"]       = s.track.genre;
+    v[L"year"]        = s.track.year;
+    v[L"track"]       = s.track.trackNumber;
+    v[L"playlist"]    = s.track.playlist;
+    v[L"filename"]    = util::FileNameNoExt(s.track.fileName);
+    v[L"ext"]         = util::FileExt(s.track.fileName);
+    v[L"pos"]         = util::FormatTime(pos);
+    v[L"dur"]         = s.duration > 0 ? util::FormatTime(s.duration) : L"--:--";
+    v[L"percent"]     = s.duration > 0 ? std::to_wstring((int)(pos / s.duration * 100.0)) : L"0";
+    v[L"bar"]         = MakeBar(s.duration > 0 ? pos / s.duration : 0.0, c.barLength);
+    v[L"status"]      = i18n::T(playing ? "Status.Playing" : "Status.Paused");
+
+    t.details   = Field(Expand(c.details, v, false));
+    t.state     = Field(Expand(c.state, v, false));
+    t.largeText = Field(Expand(c.largeText, v, false));
+    t.smallText = c.showSmallIcon ? Field(Expand(c.smallText, v, false)) : std::string();
+    if (t.details.empty() && t.state.empty()) t.details = Field(v[L"filename"]);
+
+    // clickable title (Discord: details_url, max. 256 chars)
+    if (!t.details.empty() && !c.detailsUrl.empty()) {
+        std::wstring url = util::Trim(Expand(c.detailsUrl, v, true));
+        if (url.size() > 256) {   // very long names: fall back to searching the title only
+            Vars shortV = v;
+            shortV[L"artist"] = L"";
+            url = util::Trim(Expand(c.detailsUrl, shortV, true));
+        }
+        if (IsHttpUrl(url) && url.size() <= 256) t.detailsUrl = util::ToUtf8(url);
+    }
+    return t;
+}
 
 PresenceWorker& Worker() {
     static PresenceWorker w;
@@ -127,126 +194,114 @@ void PresenceWorker::ClearCoverCache() {
     Refresh();
 }
 
+void PresenceWorker::SendTest() {
+    testRequest_ = true;
+    Wake();
+}
+
+void PresenceWorker::Reconnect() {
+    reconnect_ = true;
+    Wake();
+}
+
 PresenceStatus PresenceWorker::Status() {
     std::lock_guard<std::mutex> lk(mu_);
     return status_;
 }
 
-void PresenceWorker::SetStatus(bool connected, const std::wstring& user, const std::wstring& msg) {
+Snapshot PresenceWorker::LastSnapshot() {
     std::lock_guard<std::mutex> lk(mu_);
-    status_.connected = connected;
-    status_.user = user;
-    status_.message = msg;
+    return snap_;
+}
+
+void PresenceWorker::SetStatus(const PresenceStatus& st) {
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (status_ == st) return;
+        status_ = st;
+    }
+    NotifyUi();   // settings page (if open) shows the new state
 }
 
 // ---------------------------------------------------------------------------------------------------------------
 
+void PresenceWorker::CheckShownCover(std::chrono::steady_clock::time_point now) {
+    using namespace std::chrono;
+    const std::string shown = ipc_.TakeShownImage();
+    if (awaitShown_ && !shown.empty()) {
+        awaitShown_ = false;
+        if (shown.rfind("mp:external/", 0) == 0) {   // Discord's copy: checked in a few seconds
+            proxyCheck_ = "https://media.discordapp.net/external/" + shown.substr(12);
+            proxyAt_ = now + seconds(4);
+        }
+    }
+    if (proxyCheck_.empty() || now < proxyAt_) {
+        if (!proxyCheck_.empty()) nextWaitMs_ = std::min<unsigned>(nextWaitMs_, 1000);
+        return;
+    }
+    std::string url;
+    url.swap(proxyCheck_);
+    if (CoverResolver::Reachable(url)) return;   // Discord can show it
+
+    util::Log(L"Discord cannot load the cover (%ls) - repairing", util::FromUtf8(st_.coverUrl + coverBust_).c_str());
+    ++coverRepairs_;
+    if (coverRepairs_ <= 2) {   // the same picture under a new URL: Discord loads it again
+        coverBust_ = std::string(st_.coverUrl.find('?') == std::string::npos ? "?" : "&") + "r=" +
+                     std::to_string(coverRepairs_);
+    } else if (coverRepairs_ == 3) {   // resolve / upload it again
+        Snapshot snap;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            snap = snap_;
+        }
+        if (snap.trackId == coverTrackId_) cover_.Forget(snap.track);
+        coverTrackId_ = 0;   // -> resolved again with the next update (repairTrack_ keeps the count)
+        coverBust_.clear();
+    } else {   // give up for this track: the AIMP logo instead of a "?"
+        util::Log(L"Discord cannot show this cover - showing the AIMP logo for this track");
+        noCoverTrack_ = coverTrackId_;
+    }
+    std::lock_guard<std::mutex> lk(mu_);
+    dirty_ = true;
+}
+
 bool PresenceWorker::BuildActivity(const Config& c, const Snapshot& s, std::string& out) {
-    if (s.state == PlayState::Stopped) return false;
-    if (s.track.fileName.empty() && s.track.title.empty()) return false;
-    if (c.hideStreams && util::IsUrl(s.track.fileName)) return false;
-    for (const auto& raw : util::Split(c.excludePaths, L';')) {
-        std::wstring ex = util::Trim(raw);
-        if (!ex.empty() && util::ContainsNoCase(s.track.fileName, ex)) return false;
-    }
-
-    const auto now = clock_t_::now();
-    if (s.state == PlayState::Paused) {
-        if (c.pausedBehavior == 1) return false;
-        if (c.clearAfterPaused > 0 && now - pausedSince_ >= std::chrono::minutes(c.clearAfterPaused)) return false;
-    }
-
-    const bool playing = (s.state == PlayState::Playing);
-    double pos = s.position;
-    if (playing) pos += std::chrono::duration<double>(now - s.stamp).count();
-    if (s.duration > 0 && pos > s.duration) pos = s.duration;
-    if (pos < 0) pos = 0;
-
-    Vars v;
-    v[L"artist"]      = s.track.artist;
-    v[L"albumartist"] = s.track.albumArtist.empty() ? s.track.artist : s.track.albumArtist;
-    v[L"title"]       = s.track.title;
-    v[L"album"]       = s.track.album;
-    v[L"genre"]       = s.track.genre;
-    v[L"year"]        = s.track.year;
-    v[L"track"]       = s.track.trackNumber;
-    v[L"filename"]    = util::FileNameNoExt(s.track.fileName);
-    v[L"ext"]         = util::FileExt(s.track.fileName);
-    v[L"pos"]         = util::FormatTime(pos);
-    v[L"dur"]         = s.duration > 0 ? util::FormatTime(s.duration) : L"--:--";
-    v[L"percent"]     = s.duration > 0 ? std::to_wstring((int)(pos / s.duration * 100.0)) : L"0";
-    v[L"bar"]         = MakeBar(s.duration > 0 ? pos / s.duration : 0.0, c.barLength);
-    v[L"status"]      = playing ? L"Playing" : L"Paused";
-
-    std::string details = Field(Expand(c.details, v, false));
-    std::string state   = Field(Expand(c.state, v, false));
-    if (details.empty() && state.empty()) details = Field(v[L"filename"]);
+    const ActivityTexts t = ComputeTexts(c, s, clock_t_::now() - pausedSince_);
+    if (t.hidden != Hidden::No) return false;
 
     std::string a = "{\"type\":" + std::to_string(c.activityType) + ",\"status_display_type\":" +
                     std::to_string(c.statusDisplay);
-    if (!details.empty()) a += ",\"details\":\"" + util::JsonEscape(details) + "\"";
-    if (!state.empty())   a += ",\"state\":\"" + util::JsonEscape(state) + "\"";
+    if (!t.details.empty()) a += ",\"details\":" + Quote(t.details);
+    if (!t.state.empty()) a += ",\"state\":" + Quote(t.state);
+    if (!t.detailsUrl.empty()) a += ",\"details_url\":" + Quote(t.detailsUrl);
 
-    // clickable title / artist line (Discord: details_url / state_url, max. 256 chars)
-    auto addLink = [&](const char* key, const std::string& line, const std::wstring& urlT) {
-        if (line.empty() || urlT.empty()) return;
-        std::wstring url = util::Trim(Expand(urlT, v, true));
-        if (url.size() > 256) {  // very long names: fall back to searching the title only
-            Vars shortV = v;
-            shortV[L"artist"] = L"";
-            url = util::Trim(Expand(urlT, shortV, true));
-        }
-        if (!IsHttpUrl(url) || url.size() > 256) return;
-        a += std::string(",\"") + key + "\":\"" + util::JsonEscape(util::ToUtf8(url)) + "\"";
-    };
-    addLink("details_url", details, c.detailsUrl);
-    addLink("state_url", state, c.stateUrl);
-
-    // progress bar (Listening/Watching) or elapsed counter (Playing)
-    if (c.showTimestamps && playing) {
-        long long nowUnix = (long long)time(nullptr);
-        long long start = nowUnix - (long long)pos;
+    // progress bar (Listening) or elapsed counter (Playing)
+    if (c.showTimestamps && t.playing) {
+        long long start = (long long)time(nullptr) - (long long)t.pos;
         a += ",\"timestamps\":{\"start\":" + std::to_string(start);
-        if (s.duration > 0) a += ",\"end\":" + std::to_string(start + (long long)(s.duration + 0.5));
+        if (t.dur > 0) a += ",\"end\":" + std::to_string(start + (long long)(t.dur + 0.5));
         a += "}";
     }
 
-    // images
-    std::string large = (c.coverEnabled && !coverUrl_.empty()) ? coverUrl_ : util::ToUtf8(c.fallbackKey);
-    std::string smallImg = c.showSmallIcon ? util::ToUtf8(playing ? c.playKey : c.pauseKey) : std::string();
-    std::string largeText = Field(Expand(c.largeText, v, false));
-    std::string smallText = Field(Expand(c.smallText, v, false));
-    if (!large.empty() || !smallImg.empty()) {
-        std::string as;
-        auto add = [&](const char* key, const std::string& val) {
-            if (val.empty()) return;
-            if (!as.empty()) as += ",";
-            as += std::string("\"") + key + "\":\"" + util::JsonEscape(val) + "\"";
-        };
-        if (!large.empty()) { add("large_image", large); add("large_text", largeText); }
-        if (!smallImg.empty()) { add("small_image", smallImg); add("small_text", smallText); }
-        a += ",\"assets\":{" + as + "}";
+    // images: cover (or the application's "aimp" image) + play / pause icon
+    const bool cover = c.coverEnabled && !st_.coverUrl.empty() && noCoverTrack_ != coverTrackId_;
+    a += ",\"assets\":{\"large_image\":" + Quote(cover ? st_.coverUrl + coverBust_ : "aimp");
+    if (!t.largeText.empty()) a += ",\"large_text\":" + Quote(t.largeText);
+    if (c.showSmallIcon) {
+        a += ",\"small_image\":" + Quote(t.playing ? "play" : "pause");
+        if (!t.smallText.empty()) a += ",\"small_text\":" + Quote(t.smallText);
     }
-
-    // buttons (Discord shows max. 2, and never on your own client)
-    std::string buttons;
-    auto addButton = [&](bool enabled, const std::wstring& labelT, const std::wstring& urlT) {
-        if (!enabled) return;
-        std::wstring label = util::Trim(Expand(labelT, v, false));
-        std::wstring url = util::Trim(Expand(urlT, v, true));
-        if (label.empty() || !IsHttpUrl(url) || url.size() > 512) return;
-        if (label.size() > 32) label = label.substr(0, 31) + L"\u2026";
-        if (!buttons.empty()) buttons += ",";
-        buttons += "{\"label\":\"" + util::JsonEscape(util::ToUtf8(label)) + "\",\"url\":\"" +
-                   util::JsonEscape(util::ToUtf8(url)) + "\"}";
-    };
-    addButton(c.btn1Enabled, c.btn1Label, c.btn1Url);
-    addButton(c.btn2Enabled, c.btn2Label, c.btn2Url);
-    if (!buttons.empty()) a += ",\"buttons\":[" + buttons + "]";
-
-    a += "}";
+    a += "}}";
     out = std::move(a);
     return true;
+}
+
+std::string PresenceWorker::TestActivity(const Config& c) {
+    return "{\"type\":" + std::to_string(c.activityType) + ",\"details\":" +
+           Quote(util::ToUtf8(i18n::T("Test.Details"))) + ",\"state\":" + Quote(util::ToUtf8(i18n::T("Test.State"))) +
+           ",\"timestamps\":{\"start\":" + std::to_string((long long)time(nullptr)) +
+           "},\"assets\":{\"large_image\":\"aimp\",\"large_text\":\"AIMP Discord Rich Presence " AIMP_DISCORD_RPC_VERSION
+           "\",\"small_image\":\"play\",\"small_text\":" + Quote(util::ToUtf8(i18n::T("Test.Small"))) + "}}";
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -255,10 +310,11 @@ void PresenceWorker::Run() {
     using namespace std::chrono;
 
     while (!stop_) {
-        WaitForWork(250);
+        WaitForWork(nextWaitMs_);   // ~1 s while idle: Discord connection check, INI file check
+        nextWaitMs_ = 1000;
         if (stop_) break;
 
-        // Linux has no settings page: pick up edits of the INI file (checked about every 2 s)
+        // the INI file may be edited by hand while AIMP runs (checked about every 2 s)
         if (util::TickMs() - lastConfigCheck_ >= 2000) {
             lastConfigCheck_ = util::TickMs();
             if (config::ReloadIfChanged()) {
@@ -270,33 +326,55 @@ void PresenceWorker::Run() {
 
         Config cfg = config::Get();
         if (resetCover_.exchange(false)) coverTrackId_ = 0;
+        auto now = steady_clock::now();
+        if (testRequest_.exchange(false)) {
+            testUntil_ = now + seconds(15);
+            testShown_ = false;
+        }
+        const bool testing = now < testUntil_;
+        st_.clientId = cfg.clientId;
+        st_.testing = testing;
 
-        // ---- disabled / not configured
-        const bool active = cfg.enabled && !cfg.clientId.empty();
-        if (!active) {
+        // ---- disabled
+        if (!cfg.enabled && !testing) {
             if (ipc_.Connected()) {
                 ipc_.SetActivity("");
                 util::SleepMs(50);
                 ipc_.Disconnect();
             }
             shown_ = false;
-            SetStatus(false, L"", cfg.enabled ? L"Enter your Discord Application ID on the General tab" : L"Disabled");
+            st_.kind = PresenceStatus::Disabled;
+            st_.visible = false;
+            SetStatus(st_);
             continue;
         }
 
         // ---- (re)connect
+        if (reconnect_.exchange(false)) {
+            if (ipc_.Connected()) {
+                ipc_.SetActivity("");
+                ipc_.Disconnect();
+            }
+            lastConnectTry_ = {};
+            util::Log(L"Reconnecting (requested on the settings page)");
+        }
         if (ipc_.Connected() && connectedId_ != cfg.clientId) ipc_.Disconnect();
-        auto now = steady_clock::now();
         bool justConnected = false;
         if (!ipc_.Connected()) {
             shown_ = false;
+            st_.visible = false;
             if (now - lastConnectTry_ >= seconds(5)) {
                 lastConnectTry_ = now;
                 if (ipc_.Connect(cfg.clientId)) {
                     connectedId_ = cfg.clientId;
                     justConnected = true;
+                    ++st_.connects;
+                    util::Log(L"Connected to Discord (%ls)", util::FromUtf8(ipc_.Endpoint()).c_str());
                 } else {
-                    SetStatus(false, L"", L"Not connected: " + util::FromUtf8(ipc_.LastError()) + L" (retrying every 5 s)");
+                    st_.kind = PresenceStatus::NotConnected;
+                    st_.error = ipc_.Error();
+                    st_.errorDetail = ipc_.ErrorDetail();
+                    SetStatus(st_);
                 }
             }
             if (!ipc_.Connected()) continue;
@@ -304,10 +382,40 @@ void PresenceWorker::Run() {
         ipc_.Pump();
         if (!ipc_.Connected()) {
             lastConnectTry_ = now;
-            SetStatus(false, L"", L"Disconnected: " + util::FromUtf8(ipc_.LastError()));
+            st_.kind = PresenceStatus::NotConnected;
+            st_.error = ipc_.Error() == IpcError::None ? IpcError::Closed : ipc_.Error();
+            st_.errorDetail = ipc_.ErrorDetail();
+            st_.visible = false;
+            SetStatus(st_);
+            util::Log(L"Disconnected from Discord");
             continue;
         }
-        SetStatus(true, util::FromUtf8(ipc_.UserName()), L"Connected");
+        CheckShownCover(now);
+        st_.kind = PresenceStatus::Connected;
+        st_.error = IpcError::None;
+        st_.errorDetail.clear();
+        st_.endpoint = ipc_.Endpoint();
+        st_.user = ipc_.User();
+        SetStatus(st_);
+
+        // ---- test presence (Advanced tab)
+        if (testing) {
+            if (!testShown_ && now - lastSend_ >= seconds(2)) {
+                ipc_.SetActivity(TestActivity(cfg));
+                testShown_ = shown_ = true;
+                lastSend_ = now;
+                st_.lastSent = util::UnixTime();
+                st_.visible = true;
+                SetStatus(st_);
+                util::Log(L"Test presence sent");
+            }
+            continue;
+        }
+        if (testShown_) {   // test over: back to the normal presence
+            testShown_ = false;
+            std::lock_guard<std::mutex> lk(mu_);
+            dirty_ = true;
+        }
 
         // ---- decide whether to (re)send
         Snapshot snap;
@@ -331,24 +439,36 @@ void PresenceWorker::Run() {
                 want = true;
         }
         if (!want) continue;
-        if (!justConnected && now - lastSend_ < seconds(2)) continue;  // Discord rate limit: coalesce updates
+        if (!justConnected && now - lastSend_ < seconds(2)) {   // Discord rate limit: coalesce updates
+            nextWaitMs_ = (unsigned)duration_cast<milliseconds>(lastSend_ + seconds(2) - now).count() + 10;
+            continue;
+        }
 
         {
             std::lock_guard<std::mutex> lk(mu_);
             dirty_ = false;
-            snap = snap_;  // newest data
+            snap = snap_;   // newest data
         }
-        // newest settings as well: they may have been saved while (re)connecting above
-        cfg = config::Get();
+        cfg = config::Get();   // newest settings as well: they may have been saved while (re)connecting
 
-        // ---- cover: use cache immediately, resolve (network) after the first update went out
+        // ---- cover: use the cache immediately, resolve (network) after the first update went out
         bool needResolve = false;
-        if (!cfg.coverEnabled) {
-            coverUrl_.clear();
-        } else if (snap.state != PlayState::Stopped && snap.trackId != coverTrackId_) {
+        if (!cfg.coverEnabled || snap.state == PlayState::Stopped) {
+            st_.coverUrl.clear();
+            st_.coverSource.clear();
+            coverTrackId_ = 0;
+        } else if (snap.trackId != coverTrackId_) {
             coverTrackId_ = snap.trackId;
-            coverUrl_ = cover_.PeekCache(snap.track);
-            needResolve = coverUrl_.empty();
+            proxyCheck_.clear();
+            if (repairTrack_ != snap.trackId) {   // another track: its cover starts without repairs
+                repairTrack_ = snap.trackId;
+                coverBust_.clear();
+                coverRepairs_ = 0;
+            }
+            CoverResult r = cover_.PeekCache(snap.track);
+            st_.coverUrl = r.url;
+            st_.coverSource = r.source;
+            needResolve = r.url.empty();
         }
 
         std::string activity;
@@ -356,19 +476,30 @@ void PresenceWorker::Run() {
         if (show) {
             ipc_.SetActivity(activity);
             shown_ = true;
+            ipc_.TakeShownImage();   // (an older answer)
+            awaitShown_ = cfg.coverEnabled && st_.coverUrl.rfind("http", 0) == 0 && noCoverTrack_ != coverTrackId_;
         } else if (shown_) {
             ipc_.SetActivity("");
             shown_ = false;
         }
         lastSend_ = steady_clock::now();
+        st_.lastSent = util::UnixTime();
+        st_.visible = shown_;
+        st_.coverSearching = show && needResolve;
+        SetStatus(st_);
 
         if (show && needResolve) {
-            std::string url = cover_.Resolve(snap.track, cfg);
-            if (!url.empty() && coverTrackId_ == snap.trackId) {
-                coverUrl_ = url;
-                std::lock_guard<std::mutex> lk(mu_);
-                if (snap_.trackId == snap.trackId) dirty_ = true;   // resend with the cover
+            CoverResult r = cover_.Resolve(snap.track, cfg);
+            st_.coverSearching = false;
+            if (coverTrackId_ == snap.trackId) {
+                st_.coverUrl = r.url;
+                st_.coverSource = r.source;
+                if (!r.url.empty()) {
+                    std::lock_guard<std::mutex> lk(mu_);
+                    if (snap_.trackId == snap.trackId) dirty_ = true;   // resend with the cover
+                }
             }
+            SetStatus(st_);
         }
     }
 

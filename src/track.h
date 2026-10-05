@@ -11,4 +11,5 @@ struct TrackInfo {
     std::wstring year;
     std::wstring trackNumber;
     std::wstring fileName;   // full path or URL
+    std::wstring playlist;   // name of the playlist the track was started from (may be empty)
 };

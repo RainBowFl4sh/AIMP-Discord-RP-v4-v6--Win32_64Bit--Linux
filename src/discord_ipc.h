@@ -9,6 +9,12 @@
 #include <string>
 #include <vector>
 
+enum class IpcError { None, NotRunning, Handshake, NoAnswer, Rejected, Closed };
+
+struct DiscordUser {
+    std::string id, name, globalName, avatar;   // avatar = image hash (may be empty)
+};
+
 class DiscordIpc {
 public:
     ~DiscordIpc() { Disconnect(); }
@@ -19,9 +25,14 @@ public:
 
     void Pump();                                  // read pending frames (PING, errors, close)
     bool SetActivity(const std::string& activityJson);  // empty string = clear presence
+    // large_image of the last SET_ACTIVITY as Discord answered it (an image URL becomes "mp:external/...", Discord's
+    // own copy through its media proxy); "" = no answer since the last call
+    std::string TakeShownImage() { std::string s; s.swap(shownImage_); return s; }
 
-    const std::string& UserName() const  { return user_; }
-    const std::string& LastError() const { return lastError_; }
+    const DiscordUser& User() const         { return user_; }
+    IpcError           Error() const        { return error_; }
+    const std::string& ErrorDetail() const  { return errorDetail_; }   // Discord's own message, if any
+    const std::string& Endpoint() const     { return endpoint_; }      // pipe / socket of the connection
 
 private:
     int  ReadFrame(uint32_t& op, std::string& payload, uint32_t timeoutMs);  // 1 ok, 0 nothing, -1 error
@@ -41,9 +52,14 @@ private:
 #else
     int    fd_ = -1;
 #endif
-    std::string user_;
-    std::string lastError_;
+    void Fail(IpcError e, const std::string& detail = std::string());
+
+    DiscordUser user_;
+    IpcError    error_ = IpcError::None;
+    std::string errorDetail_;
+    std::string endpoint_;
     uint32_t    nonce_ = 0;
+    std::string shownImage_;
 };
 
 // Folders that may contain Discord's Unix socket on Linux, most likely first (native, Flatpak, Snap, /tmp).

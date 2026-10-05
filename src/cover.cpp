@@ -14,8 +14,6 @@ using std::max;
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <functional>
 #include <vector>
 
@@ -39,15 +37,7 @@ bool ReadAt(FILE* f, uint64_t off, size_t len, Bytes& out) {
     return len == 0 || fread(out.data(), 1, len, f) == len;
 }
 
-bool LooksLikeImage(const Bytes& b) {
-    if (b.size() < 12) return false;
-    if (b[0] == 0xFF && b[1] == 0xD8) return true;                       // JPEG
-    if (memcmp(b.data(), "\x89PNG", 4) == 0) return true;                // PNG
-    if (memcmp(b.data(), "GIF8", 4) == 0) return true;                   // GIF
-    if (memcmp(b.data(), "BM", 2) == 0) return true;                     // BMP
-    if (memcmp(b.data(), "RIFF", 4) == 0 && memcmp(&b[8], "WEBP", 4) == 0) return true;
-    return false;
-}
+bool LooksLikeImage(const Bytes& b) { return util::LooksLikeImage(b.data(), b.size()); }
 bool IsJpegOrPng(const Bytes& b) {
     return b.size() > 4 && ((b[0] == 0xFF && b[1] == 0xD8) || memcmp(b.data(), "\x89PNG", 4) == 0);
 }
@@ -392,19 +382,8 @@ std::string Quoteless(const std::wstring& s) {
 }
 std::wstring Enc(const std::string& s) { return util::FromUtf8(util::UrlEncode(s)); }
 
-// first value of `key` that appears after `anchor`
-std::string JsonAfter(const std::string& json, const std::string& anchor, const std::string& key) {
-    size_t p = json.find(anchor);
-    if (p == std::string::npos) return std::string();
-    return util::JsonGetString(json.substr(p), key);
-}
-long long JsonNumber(const std::string& json, const std::string& key) {
-    size_t p = json.find("\"" + key + "\"");
-    if (p == std::string::npos) return -1;
-    p = json.find(':', p);
-    if (p == std::string::npos) return -1;
-    return strtoll(json.c_str() + p + 1, nullptr, 10);
-}
+using util::JsonAfter;
+using util::JsonNumber;
 std::string Norm(const std::string& s) {   // lower-case, letters/digits only (UTF-8 bytes kept)
     std::string o;
     for (unsigned char c : s) {
@@ -478,15 +457,51 @@ Query MakeQuery(const TrackInfo& t) {
 
 std::string CatboxUpload(const Bytes& image) {
     std::string boundary = "----AIMPDiscordRPC" + std::to_string(util::TickMs());
-    std::string body = Multipart(boundary, {{"reqtype", "fileupload"}}, "fileToUpload", image);
+    std::string body = Multipart(boundary, {{"reqtype", "fileupload"}, {"userhash", ""}}, "fileToUpload", image);
     web::Response r = web::Request(L"POST", L"https://catbox.moe/user/api.php",
-                                   {L"Content-Type: multipart/form-data; boundary=" + util::FromUtf8(boundary)}, body);
+                                   {L"Content-Type: multipart/form-data; boundary=" + util::FromUtf8(boundary),
+                                    L"Accept: */*"},
+                                   body);
     std::string url = util::ToUtf8(util::Trim(util::FromUtf8(r.body)));
-    if (r.status != 200 || url.rfind("https://", 0) != 0) {
-        util::Log(L"catbox upload failed (HTTP %d)", r.status);
+    if (url.rfind("http://", 0) == 0) url.insert(4, 1, 's');
+    if (r.status != 200 || url.rfind("https://", 0) != 0 || url.find_first_of(" <\r\n") != std::string::npos) {
+        std::wstring answer = util::FromUtf8(url.substr(0, 120));   // e.g. catbox's error message
+        for (wchar_t& ch : answer)
+            if (ch < 32) ch = L' ';
+        util::Log(L"catbox upload failed (HTTP %d, %u bytes sent): %ls", r.status, (unsigned)image.size(),
+                  answer.empty() ? L"no answer" : answer.c_str());
+        // what the server said about itself (redirect target, length, ...) - helps to find the cause
+        for (const std::wstring& line : util::Split(util::FromUtf8(r.headers), L'\n')) {
+            const std::wstring t = util::Trim(line), k = util::Lower(t);
+            for (const wchar_t* name : {L"location:", L"server:", L"content-length:", L"content-type:", L"cf-ray:",
+                                        L"retry-after:", L"x-error"})
+                if (k.rfind(name, 0) == 0) util::Log(L"  catbox: %ls", t.substr(0, 160).c_str());
+        }
         return std::string();
     }
     return url;
+}
+
+// x0.at: no account; keeps files from days (big) to months (small - covers are small). Answer: the file's URL.
+std::string X0Upload(const Bytes& image) {
+    std::string boundary = "----AIMPDiscordRPC" + std::to_string(util::TickMs());
+    std::string body = Multipart(boundary, {}, "file", image);
+    web::Response r = web::Request(L"POST", L"https://x0.at/",
+                                   {L"Content-Type: multipart/form-data; boundary=" + util::FromUtf8(boundary)}, body);
+    std::string url = util::ToUtf8(util::Trim(util::FromUtf8(r.body)));
+    if (r.status != 200 || url.rfind("https://", 0) != 0 || url.find_first_of(" <\r\n") != std::string::npos) {
+        util::Log(L"x0.at upload failed (HTTP %d)", r.status);
+        return std::string();
+    }
+    return url;
+}
+
+// Is the uploaded picture really there? (catbox.moe once answered every request for a file with 0 bytes.)
+// Only the first bytes are fetched; a plain GET because x0.at answers HEAD requests with 404.
+bool ImageReachable(const std::string& url) {
+    web::Response r = web::Request(L"GET", util::FromUtf8(url), {L"Range: bytes=0-63"}, std::string(), 8u << 20);
+    Bytes head(r.body.begin(), r.body.begin() + std::min<size_t>(r.body.size(), 64));
+    return (r.status == 200 || r.status == 206) && LooksLikeImage(head);
 }
 
 std::string ImgurUpload(const Bytes& image, const std::wstring& clientId) {
@@ -696,47 +711,51 @@ std::string KeyOf(const TrackInfo& t) {
 
 // ================================================================== CoverResolver
 
-namespace {
-#ifdef _WIN32
-std::filesystem::path FsPath(const std::wstring& p) { return std::filesystem::path(p); }
-#else
-std::string FsPath(const std::wstring& p) { return util::ToUtf8(p); }
-#endif
-}  // namespace
-
 CoverResolver::CoverResolver() {
     path_ = config::DataDir() + util::kPathSep + L"DiscordRPC_covers.tsv";
     LoadCache();
 }
 
+// one line per cover: key <TAB> url [<TAB> source [<TAB> unix time]]
 void CoverResolver::LoadCache() {
     std::lock_guard<std::mutex> lk(mu_);
-    std::ifstream in(FsPath(path_), std::ios::binary);
-    if (!in) return;
-    std::vector<std::pair<std::string, std::string>> lines;
-    std::string line;
-    while (std::getline(in, line)) {
+    std::string data;
+    if (!util::ReadFileBytes(path_, data, 8u << 20)) return;
+    std::vector<std::string> lines;
+    for (size_t pos = 0; pos < data.size();) {
+        size_t nl = data.find('\n', pos);
+        std::string line = data.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+        pos = nl == std::string::npos ? data.size() : nl + 1;
         if (!line.empty() && line.back() == '\r') line.pop_back();
         size_t tab = line.find('\t');
         if (tab == std::string::npos || tab == 0 || tab + 1 >= line.size()) continue;
-        lines.emplace_back(line.substr(0, tab), line.substr(tab + 1));
+        lines.push_back(line);
+        size_t tab2 = line.find('\t', tab + 1);
+        CoverResult r;
+        r.url = line.substr(tab + 1, tab2 == std::string::npos ? std::string::npos : tab2 - tab - 1);
+        if (tab2 != std::string::npos) {
+            size_t tab3 = line.find('\t', tab2 + 1);
+            r.source = line.substr(tab2 + 1, tab3 == std::string::npos ? std::string::npos : tab3 - tab2 - 1);
+            if (tab3 != std::string::npos) r.stored = atoll(line.c_str() + tab3 + 1);
+        }
+        cache_[line.substr(0, tab)] = r;
     }
-    in.close();
-
-    if (lines.size() > 3000) {  // keep the file small: retain the newest 2000 entries
-        lines.erase(lines.begin(), lines.end() - 2000);
-        std::ofstream out(FsPath(path_), std::ios::binary | std::ios::trunc);
-        for (auto& l : lines) out << l.first << '\t' << l.second << '\n';
+    if (lines.size() > 3000) {   // keep the file small: rewrite it with the newest 2000 entries
+        std::string out;
+        for (size_t i = lines.size() - 2000; i < lines.size(); ++i) out += lines[i] + "\n";
+        util::WriteFileBytes(path_, out);
     }
-    for (auto& l : lines) cache_[l.first] = l.second;
 }
 
-void CoverResolver::StoreCache(const std::string& key, const std::string& url) {
+void CoverResolver::StoreCache(const std::string& key, const CoverResult& r) {
     std::lock_guard<std::mutex> lk(mu_);
-    cache_[key] = url;
+    cache_[key] = r;
     negative_.erase(key);
-    std::ofstream out(FsPath(path_), std::ios::binary | std::ios::app);
-    if (out) out << key << '\t' << url << '\n';
+    if (FILE* f = util::OpenFile(path_, "ab")) {
+        std::string line = key + "\t" + r.url + "\t" + r.source + "\t" + std::to_string(r.stored) + "\n";
+        fwrite(line.data(), 1, line.size(), f);
+        fclose(f);
+    }
 }
 
 void CoverResolver::ClearCache() {
@@ -746,79 +765,140 @@ void CoverResolver::ClearCache() {
     util::RemoveFile(path_);
 }
 
-std::string CoverResolver::PeekCache(const TrackInfo& t) {
+void CoverResolver::Forget(const TrackInfo& t) {
+    std::lock_guard<std::mutex> lk(mu_);
+    cache_.erase(KeyOf(t));
+    negative_.erase(KeyOf(t));
+}
+
+bool CoverResolver::Reachable(const std::string& url) { return ImageReachable(url); }
+
+CoverResult CoverResolver::PeekCache(const TrackInfo& t) {
     std::string key = KeyOf(t);
     std::lock_guard<std::mutex> lk(mu_);
     auto it = cache_.find(key);
-    return it == cache_.end() ? std::string() : it->second;
+    return it == cache_.end() ? CoverResult() : it->second;
 }
 
-std::string CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
-    if (!cfg.coverEnabled) return std::string();
+CoverResult CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
+    if (!cfg.coverEnabled) return CoverResult();
     const std::string key = KeyOf(t);
     {
         std::lock_guard<std::mutex> lk(mu_);
         auto it = cache_.find(key);
-        if (it != cache_.end()) return it->second;
+        // an uploaded cover older than 3 days is checked once per session: upload hosts delete files (x0.at
+        // after a while) or break (catbox.moe); a dead link is looked up / uploaded again
+        const bool uploaded = it != cache_.end() && it->second.source.find('|') != std::string::npos;
+        const bool old = uploaded && util::UnixTime() - it->second.stored > 3 * 86400 && !checked_[key];
+        if (it != cache_.end() && !old) return it->second;
+        if (old) {
+            const CoverResult cached = it->second;
+            checked_[key] = true;
+            mu_.unlock();
+            const bool alive = ImageReachable(cached.url);
+            mu_.lock();
+            if (alive) return cached;
+            util::Log(L"Cached cover is gone (%ls) - looking it up again", util::FromUtf8(cached.url).c_str());
+            cache_.erase(key);
+        }
         auto n = negative_.find(key);
-        if (n != negative_.end() && util::TickMs() - n->second < 10ull * 60 * 1000) return std::string();
+        if (n != negative_.end() && util::TickMs() - n->second < 10ull * 60 * 1000) return CoverResult();
     }
 
-    std::string url;
+    CoverResult res;
     const Query q = MakeQuery(t);
 
     // a) local cover (tags / folder) -> public upload host
-    auto uploadLocal = [&]() -> std::string {
+    auto uploadLocal = [&]() -> CoverResult {
+        CoverResult r;
         const bool isLocalFile = !t.fileName.empty() && !util::IsUrl(t.fileName);
-        if (!isLocalFile || cfg.uploadHost == 0 || !(cfg.srcEmbedded || cfg.srcFolder)) return std::string();
-        if (cfg.uploadHost == 2 && cfg.imgurClientId.empty()) return std::string();
+        if (!isLocalFile || cfg.uploadHost == 0 || !(cfg.srcEmbedded || cfg.srcFolder)) return r;
         Bytes art;
+        const char* from = "embedded";
         if (cfg.srcEmbedded) ExtractEmbedded(t.fileName, art);
-        if (art.empty() && cfg.srcFolder) FindFolderImage(util::DirName(t.fileName), cfg.coverNames, art);
-        if (art.empty()) return std::string();
+        if (art.empty() && cfg.srcFolder && FindFolderImage(util::DirName(t.fileName), cfg.coverNames, art)) from = "folder";
+        if (art.empty()) return r;
         Bytes upload = ToJpeg(art, 512);
         if (upload.empty() && IsJpegOrPng(art) && art.size() <= (5u << 20)) upload = art;  // GDI+ failed / Linux: raw
-        if (upload.empty()) return std::string();
-        std::string u = (cfg.uploadHost == 2) ? ImgurUpload(upload, cfg.imgurClientId) : CatboxUpload(upload);
-        if (!u.empty()) util::Log(L"Cover uploaded: %ls", util::FromUtf8(u).c_str());
-        return u;
+        if (upload.empty()) return r;
+        // the chosen host first; if it fails (or delivers nothing), x0.at / catbox.moe stand in.
+        // A host that failed is skipped for 30 minutes.
+        static std::mutex hostMu;
+        static std::map<int, uint64_t> failedAt;
+        int order[3] = {cfg.uploadHost, cfg.uploadHost == 3 ? 1 : 3, -1};
+        if (cfg.uploadHost == 2 && cfg.imgurClientId.empty()) order[0] = 3, order[1] = 1;
+        for (int host : order) {
+            if (host <= 0) continue;
+            {
+                std::lock_guard<std::mutex> lk(hostMu);
+                auto f = failedAt.find(host);
+                if (f != failedAt.end() && util::TickMs() - f->second < 30ull * 60 * 1000) continue;
+            }
+            const char* name = host == 2 ? "Imgur" : host == 3 ? "x0.at" : "catbox.moe";
+            std::string url = host == 2 ? ImgurUpload(upload, cfg.imgurClientId)
+                            : host == 3 ? X0Upload(upload) : CatboxUpload(upload);
+            if (!url.empty() && !ImageReachable(url)) {
+                util::Log(L"%ls: the uploaded cover cannot be loaded (%ls) - not used",
+                          util::FromUtf8(name).c_str(), util::FromUtf8(url).c_str());
+                url.clear();
+            }
+            if (url.empty()) {
+                std::lock_guard<std::mutex> lk(hostMu);
+                failedAt[host] = util::TickMs();
+                continue;
+            }
+            r.url = url;
+            r.source = std::string(from) + "|" + name;
+            util::Log(L"Cover uploaded to %ls: %ls", util::FromUtf8(name).c_str(), util::FromUtf8(url).c_str());
+            break;
+        }
+        return r;
     };
 
     // b) public lookups - first hit wins
-    auto lookupOnline = [&]() -> std::string {
-        struct Src { bool on; const wchar_t* name; std::function<std::string()> fn; };
+    auto lookupOnline = [&]() -> CoverResult {
+        struct Src { bool on; const char* name; std::function<std::string()> fn; };
         const Src sources[] = {
-            {cfg.srcSpotify,     L"Spotify",     [&] { return SpotifyLookup(q, cfg); }},
-            {cfg.srcDeezer,      L"Deezer",      [&] { return DeezerLookup(q); }},
-            {cfg.srcItunes,      L"iTunes",      [&] { return ItunesLookup(q); }},
-            {cfg.srcBandcamp,    L"Bandcamp",    [&] { return BandcampLookup(q); }},
-            {cfg.srcDiscogs,     L"Discogs",     [&] { return DiscogsLookup(q, cfg.discogsToken); }},
-            {cfg.srcMusicBrainz, L"MusicBrainz", [&] { return MusicBrainzLookup(q); }},
+            {cfg.srcSpotify,     "Spotify",     [&] { return SpotifyLookup(q, cfg); }},
+            {cfg.srcDeezer,      "Deezer",      [&] { return DeezerLookup(q); }},
+            {cfg.srcItunes,      "iTunes",      [&] { return ItunesLookup(q); }},
+            {cfg.srcBandcamp,    "Bandcamp",    [&] { return BandcampLookup(q); }},
+            {cfg.srcDiscogs,     "Discogs",     [&] { return DiscogsLookup(q, cfg.discogsToken); }},
+            {cfg.srcMusicBrainz, "MusicBrainz", [&] { return MusicBrainzLookup(q); }},
         };
         for (const Src& s : sources) {
             if (!s.on) continue;
             std::string u = s.fn();
             if (!u.empty() && u.size() <= 256) {
-                util::Log(L"Cover found on %ls", s.name);
-                return u;
+                util::Log(L"Cover found on %ls", util::FromUtf8(s.name).c_str());
+                return CoverResult{u, s.name};
             }
         }
-        return std::string();
+        return CoverResult();
     };
 
-    if (cfg.preferLocal) url = uploadLocal();
-    if (url.empty()) url = lookupOnline();
-    if (url.empty() && !cfg.preferLocal) url = uploadLocal();
+    if (cfg.preferLocal) res = uploadLocal();
+    if (res.url.empty()) res = lookupOnline();
+    if (res.url.empty() && !cfg.preferLocal) res = uploadLocal();
+    if (res.url.size() > 256) res.url.clear();  // Discord limit for image keys / URLs
 
-    if (url.size() > 256) url.clear();  // Discord limit for image keys / URLs
-
-    if (!url.empty()) {
-        StoreCache(key, url);
+    if (!res.url.empty()) {
+        res.stored = util::UnixTime();
+        StoreCache(key, res);
     } else {
+        res.source.clear();
         std::lock_guard<std::mutex> lk(mu_);
         negative_[key] = util::TickMs();
     }
-    return url;
+    return res;
+}
+
+bool CoverResolver::EnsureImaging() {
+#ifdef _WIN32
+    return EnsureGdip();
+#else
+    return true;
+#endif
 }
 
 void CoverResolver::ShutdownImaging() {

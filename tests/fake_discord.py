@@ -34,9 +34,17 @@ def serve(conn, log):
                 f.write(json.dumps({"op": op, "data": payload}) + "\n")
             if op == 0:  # handshake
                 send(1, {"cmd": "DISPATCH", "evt": "READY",
-                         "data": {"v": 1, "user": {"id": "1", "username": "tester"}}})
-            elif op == 1:  # command
-                send(1, {"cmd": payload.get("cmd"), "evt": None, "nonce": payload.get("nonce"), "data": {}})
+                         "data": {"v": 1, "user": {"id": "1", "username": "tester",
+                                                   "global_name": "Test User", "avatar": "abc123"}}})
+            elif op == 1:  # command; like Discord, an image URL comes back as Discord's media proxy copy
+                data = {}
+                activity = (payload.get("args") or {}).get("activity") or {}
+                image = (activity.get("assets") or {}).get("large_image", "")
+                if image.startswith("https://"):
+                    data = {"assets": {"large_image": "mp:external/SIG/https/" + image[len("https://"):]}}
+                elif image:
+                    data = {"assets": {"large_image": image}}
+                send(1, {"cmd": payload.get("cmd"), "evt": None, "nonce": payload.get("nonce"), "data": data})
             elif op == 3:  # ping
                 send(4, payload)
     except (EOFError, ConnectionError):

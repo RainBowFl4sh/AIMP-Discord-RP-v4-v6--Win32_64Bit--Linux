@@ -23,7 +23,7 @@ enum : uint32_t { OP_HANDSHAKE = 0, OP_FRAME = 1, OP_CLOSE = 2, OP_PING = 3, OP_
 // ---- Wine: Linux system calls straight from the DLL ------------------------------------------------------
 // Wine executes Windows code natively on Linux, so the Linux kernel ABI is reachable with the syscall
 // instruction (x64) / int 0x80 (x86). A tiny machine-code thunk is used because MSVC has no inline assembly
-// for x64. Only ever used after RunningUnderWine() returned true.
+// for x64. Only ever used after util::UnderWine() returned true.
 
 typedef intptr_t(__cdecl* SyscallFn)(intptr_t nr, intptr_t a1, intptr_t a2, intptr_t a3, intptr_t a4, intptr_t a5,
                                      intptr_t a6);
@@ -70,10 +70,6 @@ intptr_t Sys(intptr_t nr, intptr_t a1 = 0, intptr_t a2 = 0, intptr_t a3 = 0, int
     }
 }
 
-bool RunningUnderWine() {
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    return ntdll && GetProcAddress(ntdll, "wine_get_version") != nullptr;
-}
 #endif
 
 }  // namespace
@@ -113,11 +109,12 @@ bool DiscordIpc::OpenChannel() {
         }
         if (h != INVALID_HANDLE_VALUE) {
             pipe_ = h;
+            endpoint_ = util::ToUtf8(name);
             return true;
         }
     }
     // AIMP for Windows running in Wine on Linux: talk to the Linux Discord client directly
-    return RunningUnderWine() && OpenUnixSocketUnderWine();
+    return util::UnderWine() && OpenUnixSocketUnderWine();
 }
 
 bool DiscordIpc::OpenUnixSocketUnderWine() {
@@ -137,6 +134,7 @@ bool DiscordIpc::OpenUnixSocketUnderWine() {
             if (fd < 0) return false;
             if (Sys(NR_connect, fd, (intptr_t)&addr, (intptr_t)sizeof(addr)) == 0) {
                 wineFd_ = (long)fd;
+                endpoint_ = path + " (Wine -> Linux)";
                 util::Log(L"Wine: connected to the Linux Discord socket %ls", util::FromUtf8(path).c_str());
                 return true;
             }
@@ -224,6 +222,7 @@ bool DiscordIpc::OpenChannel() {
             if (s < 0) return false;
             if (connect(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
                 fd_ = s;
+                endpoint_ = path;
                 return true;
             }
             close(s);
@@ -279,38 +278,42 @@ bool DiscordIpc::IoRead(void* data, size_t len, size_t& got) {
 
 // ------------------------------------------------------------------------------------------- protocol
 
+void DiscordIpc::Fail(IpcError e, const std::string& detail) {
+    error_ = e;
+    errorDetail_ = detail;
+    Disconnect();
+}
+
 bool DiscordIpc::Connect(const std::wstring& clientId) {
     Disconnect();
-    user_.clear();
-    lastError_.clear();
+    user_ = DiscordUser();
+    error_ = IpcError::None;
+    errorDetail_.clear();
+    endpoint_.clear();
 
     if (!OpenChannel()) {
-        Disconnect();
-        lastError_ = "Discord is not running";
+        Fail(IpcError::NotRunning);
         return false;
     }
-
     std::string hello = "{\"v\":1,\"client_id\":\"" + util::JsonEscape(util::ToUtf8(clientId)) + "\"}";
     if (!WriteFrame(OP_HANDSHAKE, hello)) {
-        lastError_ = "Handshake failed";
-        Disconnect();
+        Fail(IpcError::Handshake);
         return false;
     }
-
     uint32_t op = 0;
     std::string payload;
     if (ReadFrame(op, payload, 4000) != 1) {
-        lastError_ = "No answer from Discord";
-        Disconnect();
+        Fail(IpcError::NoAnswer);
         return false;
     }
     if (payload.find("\"READY\"") == std::string::npos) {
-        std::string msg = util::JsonGetString(payload, "message");
-        lastError_ = msg.empty() ? "Discord rejected the application ID" : msg;
-        Disconnect();
+        Fail(IpcError::Rejected, util::JsonGetString(payload, "message"));
         return false;
     }
-    user_ = util::JsonGetString(payload, "username");
+    user_.id = util::JsonAfter(payload, "\"user\"", "id");
+    user_.name = util::JsonAfter(payload, "\"user\"", "username");
+    user_.globalName = util::JsonAfter(payload, "\"user\"", "global_name");
+    user_.avatar = util::JsonAfter(payload, "\"user\"", "avatar");
     return true;
 }
 
@@ -375,17 +378,14 @@ void DiscordIpc::HandleFrame(uint32_t op, const std::string& payload) {
         case OP_PING:
             WriteFrame(OP_PONG, payload);
             break;
-        case OP_CLOSE: {
-            std::string msg = util::JsonGetString(payload, "message");
-            lastError_ = msg.empty() ? "Connection closed by Discord" : msg;
-            Disconnect();
+        case OP_CLOSE:
+            Fail(IpcError::Closed, util::JsonGetString(payload, "message"));
             break;
-        }
         case OP_FRAME:
-            if (payload.find("\"evt\":\"ERROR\"") != std::string::npos) {
-                lastError_ = util::JsonGetString(payload, "message");
-                util::Log(L"Discord error: %ls", util::FromUtf8(lastError_).c_str());
-            }
+            if (util::JsonGetString(payload, "evt") == "ERROR")
+                util::Log(L"Discord error: %ls", util::FromUtf8(util::JsonGetString(payload, "message")).c_str());
+            else if (util::JsonGetString(payload, "cmd") == "SET_ACTIVITY")
+                shownImage_ = util::JsonGetString(payload, "large_image");
             break;
         default:
             break;

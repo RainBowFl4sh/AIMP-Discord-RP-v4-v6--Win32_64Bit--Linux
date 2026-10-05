@@ -1,5 +1,5 @@
 // AIMP SDK glue: plugin entry point, options-dialog frame and player polling.
-// AIMP SDK headers are only used here and in settings_ui.cpp (via aimp_util.h).
+// AIMP SDK headers are only used here and in settings_ui.cpp / preview.cpp (via aimp_util.h).
 //
 // Settings tab: built with AIMP's own UI API (settings_ui.cpp), identical on Windows and Linux.
 // Windows (AIMP x86 / x64): polling by a timer on the main thread.
@@ -9,30 +9,38 @@
 #ifdef _WIN32
 #define INITGUID            // define the SDK's IID_* GUIDs in this translation unit
 #include <windows.h>
+#else
+#include <dlfcn.h>
 #endif
 
 #include "aimp_util.h"
 #include "apiCore.h"
 #include "apiFileManager.h"
+#include "apiMUI.h"
 #include "apiMessages.h"
 #include "apiObjects.h"
 #include "apiOptions.h"
 #include "apiPlayer.h"
 #include "apiPlaylists.h"
 #include "apiPlugin.h"
+#include "apiThreading.h"
 
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
-#include <functional>
+#include <mutex>
 
 #include "config.h"
 #include "cover.h"
+#include "i18n.h"
+#include "jobs.h"
 #include "presence.h"
 #include "settings_ui.h"
 #include "track.h"
+#include "update.h"
 #include "util.h"
+#include "web.h"
 
 #ifdef _WIN32
 HINSTANCE g_hModule = nullptr;
@@ -49,7 +57,7 @@ const TChar* const kPluginName = AIMP_TEXT("Discord Rich Presence");
 const int kPlayerStopped = 0, kPlayerPaused = 1, kPlayerPlaying = 2;   // AIMP_MSG_PROPERTY_PLAYER_STATE values
 
 class Plugin;
-Plugin* g_plugin = nullptr;
+Plugin* g_plugin = nullptr;   // main thread only
 
 // ---- options dialog frame -----------------------------------------------------------------------------
 class OptionsFrame final : public IAIMPOptionsDialogFrame {
@@ -81,7 +89,7 @@ public:
     void WINAPI Notification(INT32 id) override;
 
     void SetService(IAIMPServiceOptionsDialog* svc) { service_ = svc; }
-    void UpdateStatus() { if (page_) page_->UpdateStatus(); }
+    void Refresh() { if (page_) page_->Refresh(); }
 
 private:
     Plugin* owner_;
@@ -90,8 +98,7 @@ private:
     std::atomic<long> ref_{1};
 };
 
-#ifndef _WIN32
-// ---- player events (Linux): AIMP calls this on its main thread ---------------------------------------
+// ---- AIMP messages (main thread): language changes, and on Linux the player events that drive the polling
 class EventHook final : public IAIMPMessageHook {
 public:
     explicit EventHook(Plugin* owner) : owner_(owner) {}
@@ -121,6 +128,29 @@ private:
     Plugin* owner_;
     std::atomic<long> ref_{1};
 };
+
+#ifndef _WIN32
+// Background threads ask for a settings page refresh through AIMP's thread service (Linux has no timer here).
+// One static task: nothing to allocate, and calls are merged while one is pending.
+class UiTask final : public IAIMPTask {
+public:
+    HRESULT __unknwncall QueryInterface(REFIID riid, LPVOID* ppv) override {
+        if (!ppv) return E_POINTER;
+        if (SameIID(riid, IID_IUnknown) || SameIID(riid, IID_IAIMPTask)) {
+            *ppv = static_cast<IAIMPTask*>(this);
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    DWORD __unknwncall AddRef() override { return 2; }   // static object
+    DWORD __unknwncall Release() override { return 1; }
+    void WINAPI Execute(IAIMPTaskOwner*) override;
+};
+UiTask g_uiTask;
+std::atomic<bool> g_uiPending{false};
+std::mutex g_threadsMu;
+IAIMPServiceThreads* g_threads = nullptr;
 #endif
 
 // ---- the plugin ---------------------------------------------------------------------------------------
@@ -160,6 +190,9 @@ public:
 
     IAIMPCore* Core() const { return core_; }
     void OnSettingsChanged() { forcePush_ = true; }
+    void DetectLanguage();
+    void OnUiNotify();
+    void RestartAimp();
 
     void Poll();
 
@@ -176,10 +209,9 @@ private:
     ComPtr<IAIMPServiceMessageDispatcher> dispatcher_;
     ComPtr<IAIMPServiceOptionsDialog> options_;
     OptionsFrame* frame_ = nullptr;
+    EventHook* hook_ = nullptr;
 #ifdef _WIN32
     HWND timerWnd_ = nullptr;
-#else
-    EventHook* hook_ = nullptr;
 #endif
     std::atomic<long> ref_{1};
 
@@ -201,6 +233,7 @@ HRESULT WINAPI OptionsFrame::GetName(IAIMPString** S) {
 
 HWND WINAPI OptionsFrame::CreateFrame(HWND parent) {
     if (page_) DestroyFrame();
+    owner_->DetectLanguage();
     page_ = SettingsPage::Create(owner_->Core(), parent, [this]() {
         if (service_) service_->FrameModified(this);   // enables AIMP's "Apply" button
     });
@@ -225,7 +258,11 @@ void WINAPI OptionsFrame::Notification(INT32 id) {
                 if (g_plugin) g_plugin->OnSettingsChanged();
             }
             break;
-        case AIMP_SERVICE_OPTIONSDIALOG_NOTIFICATION_RESET:      // "Reset" button in AIMP's options dialog
+        case AIMP_SERVICE_OPTIONSDIALOG_NOTIFICATION_LOCALIZATION:   // AIMP's language was changed
+            owner_->DetectLanguage();
+            if (page_) page_->Localize();
+            break;
+        case AIMP_SERVICE_OPTIONSDIALOG_NOTIFICATION_RESET:          // "Reset" button in AIMP's options dialog
             if (page_) {
                 Config defaults;
                 page_->Load(&defaults);
@@ -237,10 +274,13 @@ void WINAPI OptionsFrame::Notification(INT32 id) {
     }
 }
 
-#ifndef _WIN32
 void WINAPI EventHook::CoreMessage(DWORD message, INT32, void*, HRESULT*) {
     if (!owner_) return;
     switch (message) {
+        case AIMP_MSG_EVENT_LANGUAGE:
+            owner_->DetectLanguage();
+            break;
+#ifndef _WIN32
         case AIMP_MSG_EVENT_PLAYER_STATE:
         case AIMP_MSG_EVENT_STREAM_START:
         case AIMP_MSG_EVENT_STREAM_START_SUBTRACK:
@@ -250,11 +290,31 @@ void WINAPI EventHook::CoreMessage(DWORD message, INT32, void*, HRESULT*) {
         case AIMP_MSG_EVENT_PLAYER_UPDATE_POSITION:      // every second while playing
             owner_->Poll();
             break;
+#endif
         default:
             break;
     }
 }
+
+#ifndef _WIN32
+void WINAPI UiTask::Execute(IAIMPTaskOwner*) {
+    g_uiPending = false;
+    if (g_plugin) g_plugin->OnUiNotify();
+}
 #endif
+
+}  // namespace
+
+void NotifyUi() {
+#ifndef _WIN32
+    if (g_uiPending.exchange(true)) return;   // a refresh is on its way already
+    std::lock_guard<std::mutex> lk(g_threadsMu);
+    if (!g_threads || FAILED(g_threads->ExecuteInMainThread(&g_uiTask, 0))) g_uiPending = false;
+#endif
+    // Windows: the 500 ms timer refreshes the settings page anyway
+}
+
+namespace {
 
 // ------------------------------------------------------------------------------------------------ plugin impl
 
@@ -267,8 +327,32 @@ HRESULT WINAPI Plugin::Initialize(IAIMPCore* core) {
     core_->QueryInterface(IID_IAIMPServiceMessageDispatcher, dispatcher_.putVoid());
     if (!player_ || !dispatcher_) return E_FAIL;
 
+    web::Reset();
+    {   // settings and cache live in AIMP's profile folder (portable AIMP: AIMP\Profile)
+        ComPtr<IAIMPString> profile;
+        if (SUCCEEDED(core_->GetPath(AIMP_CORE_PATH_PROFILE, profile.put())) && profile)
+            config::SetProfileDir(aimp::StringOf(profile.get()));
+    }
     config::Load();
+    i18n::SetOverride(config::Get().language);
+    DetectLanguage();
+    if (const int v = aimp::Version(core_)) util::Log(L"AIMP %d.%02d", v / 100, v % 100);
+#ifndef _WIN32
+    {
+        // queued UI tasks may run after Finalize: keep this library loaded until AIMP exits
+        Dl_info info;
+        if (dladdr(reinterpret_cast<void*>(&NotifyUi), &info) && info.dli_fname)
+            dlopen(info.dli_fname, RTLD_NOW | RTLD_NOLOAD | RTLD_NODELETE);
+        std::lock_guard<std::mutex> lk(g_threadsMu);
+        core_->QueryInterface(IID_IAIMPServiceThreads, reinterpret_cast<void**>(&g_threads));
+    }
+#endif
+    {   // the update check watches the plugin file there, too, after it handed a package to AIMP
+        ComPtr<IAIMPString> dir;
+        if (SUCCEEDED(core_->GetPath(AIMP_CORE_PATH_PLUGINS, dir.put())) && dir) update::SetPluginsDir(aimp::StringOf(dir.get()));
+    }
     Worker().Start();
+    jobs::Start();
 
     // settings tab inside AIMP's options dialog (Windows and Linux)
     frame_ = new OptionsFrame(this);
@@ -276,8 +360,12 @@ HRESULT WINAPI Plugin::Initialize(IAIMPCore* core) {
         frame_->SetService(options_.get());
     core_->RegisterExtension(IID_IAIMPServiceOptionsDialog, frame_);
 
+    // AIMP messages arrive on AIMP's main thread, so all SDK calls stay there
+    hook_ = new EventHook(this);
+    if (FAILED(dispatcher_->Hook(hook_))) util::Log(L"Could not hook AIMP events");
+
 #ifdef _WIN32
-    // hidden message-only window: its WM_TIMER runs on AIMP's main thread, so all SDK calls stay there
+    // hidden message-only window: its WM_TIMER runs on AIMP's main thread
     WNDCLASSW wc = {};
     wc.lpfnWndProc = &Plugin::TimerWndProc;
     wc.hInstance = g_hModule;
@@ -289,11 +377,6 @@ HRESULT WINAPI Plugin::Initialize(IAIMPCore* core) {
         SetTimer(timerWnd_, 1, 500, nullptr);
     }
 #else
-    // player events arrive on AIMP's main thread, so all SDK calls stay there
-    hook_ = new EventHook(this);
-    if (FAILED(dispatcher_->Hook(hook_))) {
-        util::Log(L"Could not hook AIMP player events");
-    }
     Poll();
 #endif
     return S_OK;
@@ -307,14 +390,13 @@ HRESULT WINAPI Plugin::Finalize() {
         timerWnd_ = nullptr;
     }
     UnregisterClassW(L"AIMPDiscordRPCTimerWindow", g_hModule);
-#else
+#endif
     if (hook_) {
         hook_->Detach();
         if (dispatcher_) dispatcher_->Unhook(hook_);
         hook_->Release();
         hook_ = nullptr;
     }
-#endif
     if (core_ && frame_) {
         core_->UnregisterExtension(frame_);
         frame_->DestroyFrame();
@@ -322,8 +404,17 @@ HRESULT WINAPI Plugin::Finalize() {
         frame_->Release();
         frame_ = nullptr;
     }
+    web::Abort();                  // running downloads end at once, so the threads below stop quickly
+    jobs::Stop();
     Worker().Stop();               // clears the presence and joins the thread
     CoverResolver::ShutdownImaging();
+#ifndef _WIN32
+    {
+        std::lock_guard<std::mutex> lk(g_threadsMu);
+        if (g_threads) g_threads->Release();
+        g_threads = nullptr;
+    }
+#endif
 
     options_.reset();
     player_.reset();
@@ -334,6 +425,59 @@ HRESULT WINAPI Plugin::Finalize() {
     }
     g_plugin = nullptr;
     return S_OK;
+}
+
+// AIMP's language: what the MUI service tells about the loaded language file (matched in i18n.cpp)
+void Plugin::DetectLanguage() {
+    std::vector<std::wstring> hints;
+    ComPtr<IAIMPServiceMUI> mui;
+    if (core_ && SUCCEEDED(core_->QueryInterface(IID_IAIMPServiceMUI, mui.putVoid())) && mui) {
+        ComPtr<IAIMPString> name;
+        if (SUCCEEDED(mui->GetName(name.put())) && name) hints.push_back(aimp::StringOf(name.get()));
+        for (const wchar_t* key : {L"FILE\\Name", L"FILE\\Language", L"Info\\Name", L"Info\\Language", L"FILE\\LangID"}) {
+            IAIMPString* k = aimp::MakeString(core_, key);
+            ComPtr<IAIMPString> v;
+            if (k && SUCCEEDED(mui->GetValue(k, v.put())) && v) hints.push_back(aimp::StringOf(v.get()));
+            if (k) k->Release();
+        }
+    }
+    std::vector<std::wstring> clean;
+    for (const std::wstring& h : hints)
+        if (!util::Trim(h).empty()) clean.push_back(util::Trim(h));
+    i18n::SetAimpHints(clean);
+}
+
+// main thread: something changed in the background (connection, cover, downloads, update check)
+void Plugin::OnUiNotify() {
+    if (frame_) frame_->Refresh();
+    std::wstring text;
+    if (dispatcher_ && update::TakeNotification(text)) {   // shown in AIMP's running line / text display
+#ifdef _WIN32
+        dispatcher_->Send(AIMP_MSG_CMD_SHOW_NOTIFICATION, 0, const_cast<wchar_t*>(text.c_str()));
+#else
+        std::string u = util::ToUtf8(text);
+        dispatcher_->Send(AIMP_MSG_CMD_SHOW_NOTIFICATION, 0, const_cast<char*>(u.c_str()));
+#endif
+    }
+    if (update::TakeRestart()) RestartAimp();
+}
+
+// AIMP has installed the update: it only loads the new plugin after a restart (by itself it just offers
+// "Restart now" in the preferences), so restart it right away - like that button does
+void Plugin::RestartAimp() {
+    ComPtr<IAIMPServiceShutdown> shutdown;
+    HRESULT hr = E_NOINTERFACE;
+    if (core_ && SUCCEEDED(core_->QueryInterface(IID_IAIMPServiceShutdown, shutdown.putVoid())) && shutdown) {
+        IAIMPString* params = aimp::MakeString(core_, std::wstring());   // command line of the new AIMP: none
+        hr = shutdown->Restart(params);
+        if (params) params->Release();
+    }
+    if (SUCCEEDED(hr)) {
+        util::Log(L"Restarting AIMP");
+        return;
+    }
+    util::Log(L"AIMP could not be restarted (0x%08X) - restart it to load the update", (unsigned)hr);
+    update::RestartFailed();
 }
 
 #ifdef _WIN32
@@ -376,8 +520,14 @@ int Plugin::ReadState() {
 
 bool Plugin::ReadTrack(TrackInfo& t, double& duration) {
     ComPtr<IAIMPPlaylistItem> item;
-    if (SUCCEEDED(player_->GetPlaylistItem(item.put())) && item)
+    if (SUCCEEDED(player_->GetPlaylistItem(item.put())) && item) {
         t.fileName = PropString(item.get(), AIMP_PLAYLISTITEM_PROPID_FILENAME);
+        ComPtr<IAIMPPlaylist> playlist;   // its name: for the playlist filter and %playlist%
+        ComPtr<IAIMPPropertyList> props;
+        if (SUCCEEDED(item->GetValueAsObject(AIMP_PLAYLISTITEM_PROPID_PLAYLIST, IID_IAIMPPlaylist, playlist.putVoid())) &&
+            playlist && SUCCEEDED(playlist->QueryInterface(IID_IAIMPPropertyList, props.putVoid())) && props)
+            t.playlist = PropString(props.get(), AIMP_PLAYLIST_PROPID_NAME);
+    }
 
     // Prefer the player's live info: it also has the current song of internet radio streams and works
     // when playback was started outside a playlist (e.g. music library). Fall back to the playlist item.
@@ -407,7 +557,7 @@ bool Plugin::ReadTrack(TrackInfo& t, double& duration) {
 void Plugin::Poll() {
     using namespace std::chrono;
     const auto now = steady_clock::now();
-    if (frame_) frame_->UpdateStatus();   // connection status line on the settings page (if open)
+    OnUiNotify();   // settings page (if open): status, previews
 
     int st = ReadState();
     PlayState ps = (st == kPlayerPlaying) ? PlayState::Playing : (st == kPlayerPaused ? PlayState::Paused : PlayState::Stopped);
@@ -431,7 +581,7 @@ void Plugin::Poll() {
         if (dur <= 0) dur = infoDur;
         if (dur <= 0) dur = ReadReal(AIMP_MSG_PROPERTY_PLAYER_DURATION);
 
-        uint64_t id = util::Fnv1a(t.fileName + L"|" + t.artist + L"|" + t.title + L"|" + t.album);
+        uint64_t id = util::Fnv1a(t.fileName + L"|" + t.artist + L"|" + t.title + L"|" + t.album + L"|" + t.playlist);
         if (id != lastId_) push = true;                     // new track
         if (ps != lastState_) push = true;                  // play <-> pause
         double expected = lastPos_ + (lastState_ == PlayState::Playing ? duration<double>(now - lastPoll_).count() : 0.0);

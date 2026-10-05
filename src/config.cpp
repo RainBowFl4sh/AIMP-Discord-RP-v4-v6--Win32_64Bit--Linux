@@ -1,123 +1,207 @@
 #include "config.h"
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <sys/stat.h>
 #include <cwchar>
-#include <fstream>
 #include <map>
-#endif
-
 #include <mutex>
 
 #include "util.h"
+#include "version.h"
 
 namespace {
 
-std::mutex g_mutex;
+std::mutex g_mutex;     // g_cfg
 Config     g_cfg;
+std::mutex g_fileMu;    // file access + g_stamp; serializes writers
+uint64_t   g_stamp = 0;
 
-const wchar_t* kSection = L"DiscordRPC";
-
-std::wstring IniPath() { return config::DataDir() + util::kPathSep + L"DiscordRPC.ini"; }
+const wchar_t* const kSection = L"DiscordRPC";
+const int kConfigVersion = 6;   // 5 = 1.5.0 (one INI format for both platforms, UTF-16 on Windows), 6 = 1.5.3 (x0.at)
 
 #ifdef _WIN32
-
-void BeginRead() {}
-void Flush() {}
-
-std::wstring ReadStr(const wchar_t* key, const std::wstring& def) {
-    std::wstring buf(4096, L'\0');
-    DWORD n = GetPrivateProfileStringW(kSection, key, def.c_str(), &buf[0], (DWORD)buf.size(), IniPath().c_str());
-    buf.resize(n);
-    return buf;
-}
-int ReadInt(const wchar_t* key, int def) {
-    return (int)GetPrivateProfileIntW(kSection, key, def, IniPath().c_str());
-}
-void WriteStr(const wchar_t* key, const std::wstring& v) {
-    WritePrivateProfileStringW(kSection, key, v.c_str(), IniPath().c_str());
-}
-
-#else  // Linux: small INI reader / writer with the same format (UTF-8, one [DiscordRPC] section)
-
-std::map<std::wstring, std::wstring> g_ini;   // guarded by the callers (Load / Set run one at a time)
-std::mutex g_iniMutex;
-uint64_t   g_iniMtime = 0;
-
-uint64_t FileMtime() {   // modification time (ns) mixed with the size, 0 = no file
-    struct stat st;
-    if (stat(util::ToUtf8(IniPath()).c_str(), &st) != 0) return 0;
-    return ((uint64_t)st.st_mtim.tv_sec * 1000000000ull + (uint64_t)st.st_mtim.tv_nsec) ^ ((uint64_t)st.st_size << 48);
-}
-
-void BeginRead() {
-    g_ini.clear();
-    std::ifstream in(util::ToUtf8(IniPath()), std::ios::binary);
-    std::string line;
-    bool inSection = false;
-    while (std::getline(in, line)) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        std::wstring l = util::Trim(util::FromUtf8(line));
-        if (l.empty() || l[0] == L';' || l[0] == L'#') continue;
-        if (l[0] == L'[') {
-            inSection = util::Lower(l) == util::Lower(std::wstring(L"[") + kSection + L"]");
-            continue;
-        }
-        size_t eq = l.find(L'=');
-        if (!inSection || eq == std::wstring::npos) continue;
-        std::wstring v = util::Trim(l.substr(eq + 1));
-        if (v.size() >= 2 && (v[0] == L'"' || v[0] == L'\'') && v.back() == v[0]) v = v.substr(1, v.size() - 2);
-        g_ini[util::Lower(util::Trim(l.substr(0, eq)))] = v;
-    }
-    g_iniMtime = FileMtime();
-}
-
-void Flush() {
-    std::string out = "[" + util::ToUtf8(kSection) + "]\n";
-    for (const auto& kv : g_ini) out += util::ToUtf8(kv.first) + "=" + util::ToUtf8(kv.second) + "\n";
-    std::string path = util::ToUtf8(IniPath()), tmp = path + ".tmp";
-    {
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        if (!f) return;
-        f << out;
-    }
-    rename(tmp.c_str(), path.c_str());
-    g_iniMtime = FileMtime();
-}
-
-std::wstring ReadStr(const wchar_t* key, const std::wstring& def) {
-    auto it = g_ini.find(util::Lower(key));
-    return it == g_ini.end() ? def : it->second;
-}
-int ReadInt(const wchar_t* key, int def) {
-    auto it = g_ini.find(util::Lower(key));
-    if (it == g_ini.end()) return def;
-    const wchar_t* p = it->second.c_str();
-    wchar_t* end = nullptr;
-    long v = wcstol(p, &end, 10);
-    return end == p ? def : (int)v;
-}
-void WriteStr(const wchar_t* key, const std::wstring& v) {
-    // keys are stored lower case; values stay on one line
-    std::wstring clean = util::ReplaceAll(util::ReplaceAll(v, L"\r", L" "), L"\n", L" ");
-    g_ini[util::Lower(key)] = clean;
-}
-
+const wchar_t* const kEol = L"\r\n";
+#else
+const wchar_t* const kEol = L"\n";
 #endif
 
-void WriteStuff(const Config& c);   // writes every option (no flush)
+// Reads values from the parsed [DiscordRPC] section; missing / invalid entries keep the default.
+struct Reader {
+    std::map<std::wstring, std::wstring> m;   // lower-case keys
+    void Section(const wchar_t*) {}
+    const std::wstring* Find(const wchar_t* k) const {
+        auto it = m.find(util::Lower(k));
+        return it == m.end() ? nullptr : &it->second;
+    }
+    void Str(const wchar_t* k, std::wstring& v) const {
+        if (const std::wstring* p = Find(k)) v = *p;
+    }
+    void Num(const wchar_t* k, long long& v) const {
+        const std::wstring* p = Find(k);
+        if (!p) return;
+        wchar_t* end = nullptr;
+        long long x = wcstoll(p->c_str(), &end, 10);
+        if (end != p->c_str()) v = x;
+    }
+    void Int(const wchar_t* k, int& v) const { long long x = v; Num(k, x); v = (int)x; }
+    void I64(const wchar_t* k, int64_t& v) const { long long x = v; Num(k, x); v = (int64_t)x; }
+    void Bool(const wchar_t* k, bool& v) const { long long x = v ? 1 : 0; Num(k, x); v = x != 0; }
+};
 
-bool ReadBool(const wchar_t* key, bool def) { return ReadInt(key, def ? 1 : 0) != 0; }
-void WriteInt(const wchar_t* key, int v) { WriteStr(key, std::to_wstring(v)); }
-void WriteBool(const wchar_t* key, bool v) { WriteInt(key, v ? 1 : 0); }
+// Writes "key=value" lines (one line per value) in the order of the Visit functions.
+struct Writer {
+    std::wstring t;
+    void Section(const wchar_t* comment) { t += kEol; t += L"; "; t += comment; t += kEol; }
+    void Str(const wchar_t* k, const std::wstring& v) {
+        t += k;
+        t += L'=';
+        t += util::ReplaceAll(util::ReplaceAll(v, L"\r", L" "), L"\n", L" ");
+        t += kEol;
+    }
+    void Int(const wchar_t* k, long long v) { Str(k, std::to_wstring(v)); }
+    void I64(const wchar_t* k, int64_t v) { Int(k, (long long)v); }
+    void Bool(const wchar_t* k, bool v) { Int(k, v ? 1 : 0); }
+};
 
-}  // namespace
+// The one list of all settings (used for reading, writing and exporting).
+template <class C, class V>
+void VisitSettings(C& c, V& v) {
+    v.Section(L"General");
+    v.Bool(L"Enabled", c.enabled);
+    v.Int(L"ActivityType", c.activityType);
+    v.Int(L"StatusDisplay", c.statusDisplay);
+    v.Bool(L"ShowTimestamps", c.showTimestamps);
+    v.Int(L"PausedBehavior", c.pausedBehavior);
+    v.Int(L"ClearAfterPausedMin", c.clearAfterPaused);
+    v.Bool(L"HideStreams", c.hideStreams);
+    v.Str(L"ExcludePaths", c.excludePaths);
+    v.Section(L"Display (placeholders: %artist% %title% %album% %albumartist% %genre% %year% %track% %playlist% "
+              L"%filename% %ext% %pos% %dur% %percent% %bar% %status%)");
+    v.Str(L"Details", c.details);
+    v.Str(L"State", c.state);
+    v.Str(L"LargeText", c.largeText);
+    v.Str(L"SmallText", c.smallText);
+    v.Bool(L"ShowSmallIcon", c.showSmallIcon);
+    v.Int(L"BarLength", c.barLength);
+    v.Int(L"RefreshSeconds", c.refreshSeconds);
+    v.Bool(L"TitleLink", c.titleLink);
+    v.Bool(L"TitleLinkCustom", c.titleLinkCustom);
+    v.Str(L"TitleLinkUrl", c.titleLinkUrl);
+    v.Section(L"Cover art (UploadHost: 0 = off, 1 = catbox.moe, 2 = Imgur, 3 = x0.at)");
+    v.Bool(L"CoverEnabled", c.coverEnabled);
+    v.Bool(L"CoverEmbedded", c.srcEmbedded);
+    v.Bool(L"CoverFolder", c.srcFolder);
+    v.Str(L"CoverNames", c.coverNames);
+    v.Int(L"UploadHost", c.uploadHost);
+    v.Str(L"ImgurClientId", c.imgurClientId);
+    v.Bool(L"CoverPreferLocal", c.preferLocal);
+    v.Bool(L"CoverSpotify", c.srcSpotify);
+    v.Str(L"SpotifyClientId", c.spotifyId);
+    v.Str(L"SpotifyClientSecret", c.spotifySecret);
+    v.Bool(L"CoverDeezer", c.srcDeezer);
+    v.Bool(L"CoverItunes", c.srcItunes);
+    v.Bool(L"CoverBandcamp", c.srcBandcamp);
+    v.Bool(L"CoverDiscogs", c.srcDiscogs);
+    v.Str(L"DiscogsToken", c.discogsToken);
+    v.Bool(L"CoverMusicBrainz", c.srcMusicBrainz);
+    v.Section(L"Advanced (Language: empty = AIMP's language, or en / de / ru / uk)");
+    v.Str(L"ExcludePlaylists", c.excludePlaylists);
+    v.Str(L"Language", c.language);
+    v.Bool(L"UseCustomApp", c.useCustomApp);
+    v.Str(L"CustomClientId", c.customClientId);
+    v.Section(L"Updates (UpdateFrequency: 0 = every AIMP start, 1 = daily, 2 = weekly, 3 = monthly)");
+    v.Bool(L"UpdateCheck", c.updateCheck);
+    v.Int(L"UpdateFrequency", c.updateFrequency);
+    v.Bool(L"UpdateAuto", c.updateAuto);
+}
 
-namespace config {
+template <class C, class V>
+void VisitState(C& c, V& v) {   // bookkeeping of the update check, not exported
+    v.I64(L"UpdateLastCheck", c.updateLastCheck);
+    v.Str(L"UpdateLatest", c.updateLatest);
+    v.Str(L"UpdateOffered", c.updateOffered);
+    v.Str(L"LastVersion", c.lastVersion);
+}
 
-std::wstring DataDir() {
+int Clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+Config FromText(const std::wstring& text, bool* found = nullptr, long long* version = nullptr) {
+    Reader r;
+    for (auto& kv : util::IniSection(text, kSection, found)) r.m[util::Lower(kv.first)] = kv.second;
+    Config c;   // defaults
+    VisitSettings(c, r);
+    VisitState(c, r);
+    long long ver = 1;
+    r.Num(L"ConfigVersion", ver);
+    if (version) *version = r.Find(L"ConfigVersion") ? ver : 0;
+
+    // migrations from older versions
+    if (!r.Find(L"UseCustomApp")) {   // 1.1: own ID in "ClientId"
+        std::wstring old;
+        r.Str(L"ClientId", old);
+        old = util::Trim(old);
+        if (!old.empty() && old != kDefaultClientId) {
+            c.customClientId = old;
+            c.useCustomApp = true;
+        }
+    }
+    if (ver < 2 && c.state == L"%artist%") c.state = L"by %artist%";   // 1.1 default
+    if (ver < 4) c.pausedBehavior = 1;                                // 1.3: hide while paused (PreMiD wins)
+    if (ver < 6 && c.uploadHost == 1) c.uploadHost = 3;               // 1.5.3: catbox.moe (old default) -> x0.at
+    if (!r.Find(L"UploadHost")) {                                    // 1.0: "CoverImgur"
+        bool imgur = false;
+        r.Bool(L"CoverImgur", imgur);
+        if (imgur && !util::Trim(c.imgurClientId).empty()) c.uploadHost = 2;
+    }
+
+    for (std::wstring* s : {&c.customClientId, &c.titleLinkUrl, &c.imgurClientId, &c.spotifyId, &c.spotifySecret,
+                            &c.discogsToken, &c.language})
+        *s = util::Trim(*s);
+    if (c.titleLinkUrl.empty()) c.titleLinkUrl = kDefaultTitleLink;
+    c.barLength = Clamp(c.barLength, 4, 30);
+    if (c.refreshSeconds < 5) c.refreshSeconds = 5;
+    if (c.clearAfterPaused < 0) c.clearAfterPaused = 0;
+    if (c.activityType != 0 && c.activityType != 2) c.activityType = 2;
+    if (c.statusDisplay < 0 || c.statusDisplay > 2) c.statusDisplay = 1;
+    c.pausedBehavior = Clamp(c.pausedBehavior, 0, 1);
+    if (c.uploadHost < 0 || c.uploadHost > 3) c.uploadHost = 3;
+    c.updateFrequency = Clamp(c.updateFrequency, 0, 3);
+    return c;
+}
+
+void Store(Config c) {   // publishes the config (with its computed fields)
+    config::Resolve(c);
+    std::lock_guard<std::mutex> lk(g_mutex);
+    g_cfg = std::move(c);
+}
+
+std::string Utf8Bom(const std::wstring& text) { return "\xEF\xBB\xBF" + util::ToUtf8(text); }
+
+void WriteLocked(Config c) {   // g_fileMu held
+    Writer w;
+    w.t = L"[DiscordRPC]";
+    w.t += kEol;
+    w.Int(L"ConfigVersion", kConfigVersion);
+    VisitSettings(c, w);
+    w.Section(L"Update check state");
+    VisitState(c, w);
+#ifdef _WIN32
+    // UTF-16LE with BOM: any text works, and the Windows profile API (older plugin versions) reads it too
+    std::string bytes("\xFF\xFE", 2);
+    for (wchar_t ch : w.t) {
+        bytes += (char)(ch & 0xFF);
+        bytes += (char)((ch >> 8) & 0xFF);
+    }
+#else
+    std::string bytes = util::ToUtf8(w.t);
+#endif
+    if (!util::WriteFileBytes(config::IniPath(), bytes)) util::Log(L"Could not write %ls", config::IniPath().c_str());
+    g_stamp = util::FileStamp(config::IniPath());
+}
+
+// AIMP's profile folder (set at start); the plugin keeps its files there, as the AIMP plugin rules ask
+std::wstring g_profileDir;
+
+// where versions before 1.5.3 kept their files (also used when AIMP does not tell its profile folder)
+std::wstring LegacyDir() {
 #ifdef _WIN32
     std::wstring appdata = util::GetEnv(L"APPDATA");
     std::wstring dir = appdata.empty() ? std::wstring(L".") : appdata + L"\\AIMP";
@@ -136,112 +220,70 @@ std::wstring DataDir() {
     return dir;
 }
 
-// fills the computed fields (effective client ID / title link) from the user-facing options
-static void Resolve(Config& c) {
-    c.clientId = (c.useCustomApp && !c.customClientId.empty()) ? c.customClientId : std::wstring(kDefaultClientId);
-    if (!c.titleLink)                                   c.detailsUrl.clear();
-    else if (c.titleLinkCustom && !c.titleLinkUrl.empty()) c.detailsUrl = c.titleLinkUrl;
-    else                                                c.detailsUrl = kDefaultTitleLink;
-    c.stateUrl.clear();
-    // fixed asset keys / no buttons: these are not user settings any more
-    c.playKey = L"play"; c.pauseKey = L"pause"; c.fallbackKey = L"aimp";
-    c.btn1Enabled = c.btn2Enabled = false;
+std::wstring Normalized(std::wstring dir) {
+    while (dir.size() > 1 && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
+#ifdef _WIN32
+    dir = util::Lower(dir);
+#endif
+    return dir;
 }
 
+}  // namespace
+
+namespace config {
+
+void SetProfileDir(const std::wstring& profile) {
+    std::wstring dir = profile;
+    while (dir.size() > 1 && (dir.back() == L'\\' || dir.back() == L'/')) dir.pop_back();
+    if (dir.empty()) return;
+    util::MakeDir(dir);
+    const std::wstring legacy = LegacyDir();
+    g_profileDir = dir;
+    if (Normalized(dir) == Normalized(legacy)) return;
+    // portable AIMP and other setups: take over the settings of the old location once
+    const std::wstring sep(1, util::kPathSep);
+    if (util::IsRegularFile(dir + sep + L"DiscordRPC.ini") || !util::IsRegularFile(legacy + sep + L"DiscordRPC.ini"))
+        return;
+    for (const wchar_t* name : {L"DiscordRPC.ini", L"DiscordRPC_covers.tsv"}) {
+        std::string bytes;
+        if (util::ReadFileBytes(legacy + sep + name, bytes, 8u << 20)) util::WriteFileBytes(dir + sep + name, bytes);
+    }
+    util::Log(L"Settings taken over from %ls into AIMP's profile folder %ls", legacy.c_str(), dir.c_str());
+}
+
+std::wstring DataDir() {
+    if (!g_profileDir.empty()) return g_profileDir;
+    return LegacyDir();
+}
+
+std::wstring CacheDir() {
+    std::wstring dir = DataDir() + util::kPathSep + L"DiscordRPC";
+    util::MakeDir(dir);
+    return dir;
+}
+
+std::wstring IniPath() { return DataDir() + util::kPathSep + L"DiscordRPC.ini"; }
+
 void Load() {
-#ifndef _WIN32
-    std::lock_guard<std::mutex> ini(g_iniMutex);
-#endif
-    BeginRead();
-    Config c;  // defaults
-    c.enabled          = ReadBool(L"Enabled", c.enabled);
-    c.customClientId   = util::Trim(ReadStr(L"CustomClientId", L""));
-    c.useCustomApp     = ReadBool(L"UseCustomApp", false);
-    {   // migrate an own ID from older versions
-        std::wstring old = util::Trim(ReadStr(L"ClientId", L""));
-        if (c.customClientId.empty() && !old.empty() && old != kDefaultClientId) {
-            c.customClientId = old;
-            c.useCustomApp = true;
-        }
-    }
-    c.activityType     = ReadInt(L"ActivityType", c.activityType);
-    c.statusDisplay    = ReadInt(L"StatusDisplay", c.statusDisplay);
-    c.showTimestamps   = ReadBool(L"ShowTimestamps", c.showTimestamps);
-    c.pausedBehavior   = ReadInt(L"PausedBehavior", c.pausedBehavior);
-    c.clearAfterPaused = ReadInt(L"ClearAfterPausedMin", c.clearAfterPaused);
-    c.hideStreams      = ReadBool(L"HideStreams", c.hideStreams);
-    c.excludePaths     = ReadStr(L"ExcludePaths", c.excludePaths);
-
-    c.details        = ReadStr(L"Details", c.details);
-    c.state          = ReadStr(L"State", c.state);
-    const int cfgVersion = ReadInt(L"ConfigVersion", 1);
-    if (cfgVersion < 2 && c.state == L"%artist%") c.state = L"by %artist%";  // 1.1 default
-    if (cfgVersion < 4 && c.pausedBehavior != 1) c.pausedBehavior = 1;      // 1.3 default: clear while paused (PreMiD wins)
-    c.largeText      = ReadStr(L"LargeText", c.largeText);
-    c.titleLink       = ReadBool(L"TitleLink", c.titleLink);
-    c.titleLinkCustom = ReadBool(L"TitleLinkCustom", c.titleLinkCustom);
-    c.titleLinkUrl    = util::Trim(ReadStr(L"TitleLinkUrl", c.titleLinkUrl));
-    if (c.titleLinkUrl.empty()) c.titleLinkUrl = kDefaultTitleLink;
-    c.smallText      = ReadStr(L"SmallText", c.smallText);
-    c.showSmallIcon  = ReadBool(L"ShowSmallIcon", c.showSmallIcon);
-    c.barLength      = ReadInt(L"BarLength", c.barLength);
-    c.refreshSeconds = ReadInt(L"RefreshSeconds", c.refreshSeconds);
-
-    c.coverEnabled  = ReadBool(L"CoverEnabled", c.coverEnabled);
-    c.srcEmbedded   = ReadBool(L"CoverEmbedded", c.srcEmbedded);
-    c.srcFolder     = ReadBool(L"CoverFolder", c.srcFolder);
-    c.coverNames    = ReadStr(L"CoverNames", c.coverNames);
-    c.imgurClientId = util::Trim(ReadStr(L"ImgurClientId", c.imgurClientId));
-    {   // migrate 1.0 setting "CoverImgur" if UploadHost was never written
-        int def = (ReadBool(L"CoverImgur", false) && !c.imgurClientId.empty()) ? 2 : c.uploadHost;
-        c.uploadHost = ReadInt(L"UploadHost", def);
-        if (c.uploadHost < 0 || c.uploadHost > 2) c.uploadHost = 1;
-    }
-    c.preferLocal    = ReadBool(L"CoverPreferLocal", c.preferLocal);
-    c.srcSpotify     = ReadBool(L"CoverSpotify", c.srcSpotify);
-    c.srcDeezer      = ReadBool(L"CoverDeezer", c.srcDeezer);
-    c.srcItunes      = ReadBool(L"CoverItunes", c.srcItunes);
-    c.srcBandcamp    = ReadBool(L"CoverBandcamp", c.srcBandcamp);
-    c.srcDiscogs     = ReadBool(L"CoverDiscogs", c.srcDiscogs);
-    c.srcMusicBrainz = ReadBool(L"CoverMusicBrainz", c.srcMusicBrainz);
-    c.spotifyId      = util::Trim(ReadStr(L"SpotifyClientId", c.spotifyId));
-    c.spotifySecret  = util::Trim(ReadStr(L"SpotifyClientSecret", c.spotifySecret));
-    c.discogsToken   = util::Trim(ReadStr(L"DiscogsToken", c.discogsToken));
-
-
-    if (c.barLength < 4) c.barLength = 4;
-    if (c.barLength > 30) c.barLength = 30;
-    if (c.refreshSeconds < 5) c.refreshSeconds = 5;
-    if (c.clearAfterPaused < 0) c.clearAfterPaused = 0;
-    if (c.activityType != 0 && c.activityType != 2) c.activityType = 2;
-    if (c.statusDisplay < 0 || c.statusDisplay > 2) c.statusDisplay = 1;
-    if (c.pausedBehavior < 0 || c.pausedBehavior > 1) c.pausedBehavior = 1;
-
-    Resolve(c);
-    {
-        std::lock_guard<std::mutex> lk(g_mutex);
-        g_cfg = c;
-    }
-#ifndef _WIN32
-    // no settings page on Linux: write a complete file with all options once, so it can be edited by hand
-    if (ReadInt(L"ConfigVersion", 0) == 0) {
-        WriteStuff(c);
-        Flush();
-    }
-#endif
+    std::lock_guard<std::mutex> f(g_fileMu);
+    std::string raw;
+    util::ReadFileBytes(IniPath(), raw, 1u << 20);
+    const std::wstring text = util::DecodeText(raw);
+    g_stamp = util::FileStamp(IniPath());
+    long long ver = 0;
+    Config c = FromText(text, nullptr, &ver);
+    Store(c);
+    // first start / older version: write a complete file with all options (also converts the encoding)
+    if (ver < kConfigVersion) WriteLocked(c);
 }
 
 bool ReloadIfChanged() {
-#ifdef _WIN32
-    return false;   // the settings page writes through Set()
-#else
     {
-        std::lock_guard<std::mutex> ini(g_iniMutex);
-        if (FileMtime() == g_iniMtime) return false;
+        std::lock_guard<std::mutex> f(g_fileMu);
+        if (util::FileStamp(IniPath()) == g_stamp) return false;
     }
     Load();
     return true;
-#endif
 }
 
 Config Get() {
@@ -249,65 +291,51 @@ Config Get() {
     return g_cfg;
 }
 
+void Resolve(Config& c) {
+    c.clientId = (c.useCustomApp && !c.customClientId.empty()) ? c.customClientId : std::wstring(kDefaultClientId);
+    if (!c.titleLink)           c.detailsUrl.clear();
+    else if (c.titleLinkCustom) c.detailsUrl = c.titleLinkUrl.empty() ? std::wstring(kDefaultTitleLink) : c.titleLinkUrl;
+    else                        c.detailsUrl = kDefaultTitleLink;
+}
+
+void Update(const std::function<void(Config&)>& change) {
+    std::lock_guard<std::mutex> f(g_fileMu);
+    Config c = Get();
+    change(c);
+    Store(c);
+    WriteLocked(c);
+}
+
 void Set(const Config& in) {
+    Update([&](Config& c) { c = in; });
+}
+
+bool ExportTo(const std::wstring& path, const Config& in) {
     Config c = in;
-    Resolve(c);
-    {
-        std::lock_guard<std::mutex> lk(g_mutex);
-        g_cfg = c;
-    }
-#ifndef _WIN32
-    std::lock_guard<std::mutex> ini(g_iniMutex);
-#endif
-    WriteStuff(c);
-    Flush();
+    Writer w;
+    w.t = L"; AIMP Discord Rich Presence " AIMP_DISCORD_RPC_VERSION_W L" - settings (Advanced -> Import)";
+    w.t += kEol;
+    w.t += L"[DiscordRPC]";
+    w.t += kEol;
+    w.Int(L"ConfigVersion", kConfigVersion);
+    VisitSettings(c, w);
+    return util::WriteFileBytes(path, Utf8Bom(w.t));
+}
+
+bool ImportFrom(const std::wstring& path) {
+    std::string raw;
+    if (!util::ReadFileBytes(path, raw, 1u << 20)) return false;
+    bool found = false;
+    Config imported = FromText(util::DecodeText(raw), &found);
+    if (!found) return false;
+    Update([&](Config& c) {
+        imported.updateLastCheck = c.updateLastCheck;   // keep the update bookkeeping of this PC
+        imported.updateLatest = c.updateLatest;
+        imported.updateOffered = c.updateOffered;
+        imported.lastVersion = c.lastVersion;
+        c = imported;
+    });
+    return true;
 }
 
 }  // namespace config
-
-namespace {
-
-void WriteStuff(const Config& c) {
-    WriteBool(L"Enabled", c.enabled);
-    WriteBool(L"UseCustomApp", c.useCustomApp);
-    WriteStr(L"CustomClientId", c.customClientId);
-    WriteBool(L"TitleLink", c.titleLink);
-    WriteBool(L"TitleLinkCustom", c.titleLinkCustom);
-    WriteStr(L"TitleLinkUrl", c.titleLinkUrl);
-    WriteInt(L"ActivityType", c.activityType);
-    WriteInt(L"StatusDisplay", c.statusDisplay);
-    WriteBool(L"ShowTimestamps", c.showTimestamps);
-    WriteInt(L"PausedBehavior", c.pausedBehavior);
-    WriteInt(L"ClearAfterPausedMin", c.clearAfterPaused);
-    WriteBool(L"HideStreams", c.hideStreams);
-    WriteStr(L"ExcludePaths", c.excludePaths);
-
-    WriteStr(L"Details", c.details);
-    WriteStr(L"State", c.state);
-    WriteInt(L"ConfigVersion", 4);
-    WriteStr(L"LargeText", c.largeText);
-    WriteStr(L"SmallText", c.smallText);
-    WriteBool(L"ShowSmallIcon", c.showSmallIcon);
-    WriteInt(L"BarLength", c.barLength);
-    WriteInt(L"RefreshSeconds", c.refreshSeconds);
-
-    WriteBool(L"CoverEnabled", c.coverEnabled);
-    WriteBool(L"CoverEmbedded", c.srcEmbedded);
-    WriteBool(L"CoverFolder", c.srcFolder);
-    WriteInt(L"UploadHost", c.uploadHost);
-    WriteBool(L"CoverPreferLocal", c.preferLocal);
-    WriteBool(L"CoverSpotify", c.srcSpotify);
-    WriteBool(L"CoverDeezer", c.srcDeezer);
-    WriteBool(L"CoverItunes", c.srcItunes);
-    WriteBool(L"CoverBandcamp", c.srcBandcamp);
-    WriteBool(L"CoverDiscogs", c.srcDiscogs);
-    WriteBool(L"CoverMusicBrainz", c.srcMusicBrainz);
-    WriteStr(L"SpotifyClientId", c.spotifyId);
-    WriteStr(L"SpotifyClientSecret", c.spotifySecret);
-    WriteStr(L"DiscogsToken", c.discogsToken);
-    WriteStr(L"CoverNames", c.coverNames);
-    WriteStr(L"ImgurClientId", c.imgurClientId);
-
-}
-
-}  // namespace

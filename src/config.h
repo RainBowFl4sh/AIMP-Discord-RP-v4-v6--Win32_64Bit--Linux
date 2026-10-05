@@ -1,5 +1,8 @@
-// Persistent plugin settings (Windows: %APPDATA%\AIMP\DiscordRPC.ini, Linux: ~/.config/AIMP/DiscordRPC.ini).
+// Persistent plugin settings: DiscordRPC.ini in AIMP's profile folder (usually %APPDATA%\AIMP or ~/.config/AIMP).
+// One INI reader / writer for both platforms; the file may be edited by hand while AIMP is running.
 #pragma once
+#include <cstdint>
+#include <functional>
 #include <string>
 
 // Built-in defaults shared by every user (never shown in the UI)
@@ -7,11 +10,8 @@ inline const wchar_t* const kDefaultClientId  = L"1555109720807702559";   // Dis
 inline const wchar_t* const kDefaultTitleLink = L"https://www.youtube.com/results?search_query=%artist%+%title%";
 
 struct Config {
-    // --- General ---
+    // --- General
     bool         enabled          = true;
-    bool         useCustomApp     = false;       // advanced: use an own Discord application
-    std::wstring customClientId;
-    std::wstring clientId = kDefaultClientId;    // effective ID (computed, not stored)
     int          activityType     = 2;           // 2 = Listening (progress bar), 0 = Playing
     int          statusDisplay    = 1;           // 0 = app name, 1 = state line (artist), 2 = details line (title)
     bool         showTimestamps   = true;        // progress bar / elapsed time
@@ -20,28 +20,25 @@ struct Config {
     bool         hideStreams      = false;
     std::wstring excludePaths;                   // ';' separated substrings
 
-    // --- Text ---
+    // --- Display
     std::wstring details   = L"%title%";
     std::wstring state     = L"by %artist%";
+    std::wstring largeText = L"%album%";
+    std::wstring smallText = L"%status%";
+    bool         showSmallIcon  = true;
+    int          barLength      = 12;            // characters for %bar%
+    int          refreshSeconds = 15;            // refresh interval if %pos% / %bar% / %percent% are used
     // clickable song title (Discord opens the link when someone clicks the title)
     bool         titleLink       = true;
     bool         titleLinkCustom = false;        // override the default YouTube search
     std::wstring titleLinkUrl    = kDefaultTitleLink;
-    std::wstring detailsUrl, stateUrl;           // effective links (computed, not stored)
-    std::wstring largeText = L"%album%";
-    std::wstring smallText = L"%status%";
-    bool         showSmallIcon = true;
-    std::wstring playKey   = L"play";
-    std::wstring pauseKey  = L"pause";
-    int          barLength = 12;                 // characters for %bar%
-    int          refreshSeconds = 15;            // refresh interval if %pos% / %bar% / %percent% are used
 
-    // --- Cover art ---
+    // --- Cover art
     bool         coverEnabled  = true;
     bool         srcEmbedded   = true;           // tags (ID3v2 / FLAC / MP4)
     bool         srcFolder     = true;           // cover.jpg etc. next to the file
     std::wstring coverNames    = L"cover;folder;front;album;albumart";
-    int          uploadHost    = 1;              // local cover upload: 0 = off, 1 = catbox.moe (no key), 2 = Imgur
+    int          uploadHost    = 3;              // local cover upload: 0 = off, 1 = catbox.moe, 2 = Imgur, 3 = x0.at
     bool         preferLocal   = true;           // local cover first, online lookup only if none found
     std::wstring imgurClientId;
     // online lookup (public URLs, nothing is uploaded)
@@ -52,21 +49,38 @@ struct Config {
     bool         srcDiscogs     = false;         // needs personal access token
     bool         srcMusicBrainz = true;          // MusicBrainz + Cover Art Archive
     std::wstring spotifyId, spotifySecret, discogsToken;
-    std::wstring fallbackKey   = L"aimp";        // asset key uploaded in the Developer Portal
 
-    // --- Buttons (max. 2 in Discord) ---
-    bool         btn1Enabled = false;
-    std::wstring btn1Label   = L"Search on YouTube";
-    std::wstring btn1Url     = L"https://www.youtube.com/results?search_query=%artist%+%title%";
-    bool         btn2Enabled = false;
-    std::wstring btn2Label   = L"Search on Last.fm";
-    std::wstring btn2Url     = L"https://www.last.fm/search?q=%artist%+%title%";
+    // --- Advanced
+    std::wstring excludePlaylists;               // ';' separated substrings of playlist names
+    std::wstring language;                       // "" = AIMP's language, otherwise a language code ("de", "ru", ...)
+    bool         useCustomApp   = false;         // use an own Discord application
+    std::wstring customClientId;
+
+    // --- Updates (About tab)
+    bool         updateCheck     = true;
+    int          updateFrequency = 1;            // 0 = every AIMP start, 1 = daily, 2 = weekly, 3 = monthly
+    bool         updateAuto      = true;         // download the package and open it in AIMP
+    int64_t      updateLastCheck = 0;            // unix time
+    std::wstring updateLatest;                   // newest version found by the last check
+    std::wstring updateOffered;                  // version already installed automatically once
+    std::wstring lastVersion;                    // plugin version of the last start (update finished -> notice)
+
+    // --- computed, not stored
+    std::wstring clientId = kDefaultClientId;    // effective application ID
+    std::wstring detailsUrl;                     // effective title link (empty = none)
 };
 
 namespace config {
-std::wstring DataDir();          // %APPDATA%\AIMP  or  $XDG_CONFIG_HOME/AIMP
+void   SetProfileDir(const std::wstring& dir);   // at start, before Load: AIMP's profile folder (takes over old files)
+std::wstring DataDir();          // AIMP's profile folder; without it %APPDATA%\AIMP or $XDG_CONFIG_HOME/AIMP
+std::wstring CacheDir();         // DataDir()/DiscordRPC: downloaded images and updates
+std::wstring IniPath();
 void   Load();                   // read from disk into memory
-bool   ReloadIfChanged();        // Linux: re-read the file after it was edited by hand (true = reloaded)
+bool   ReloadIfChanged();        // re-read the file after it was edited by hand (true = reloaded)
 Config Get();                    // thread-safe copy
+void   Resolve(Config& c);       // fills the computed fields (clientId, detailsUrl)
 void   Set(const Config& c);     // update memory + write to disk
+void   Update(const std::function<void(Config&)>& change);   // atomic read-modify-write (+ disk)
+bool   ExportTo(const std::wstring& path, const Config& c);  // settings only (no update bookkeeping)
+bool   ImportFrom(const std::wstring& path);                 // false = not a settings file of this plugin
 }  // namespace config
