@@ -16,6 +16,7 @@
 #include "aimp_util.h"
 #include "apiCore.h"
 #include "apiFileManager.h"
+#include "apiGUI.h"
 #include "apiMUI.h"
 #include "apiMessages.h"
 #include "apiObjects.h"
@@ -190,9 +191,11 @@ public:
 
     IAIMPCore* Core() const { return core_; }
     void OnSettingsChanged() { forcePush_ = true; }
+    void OnTrackEvent() { trackDirty_ = true; }   // AIMP reports a new track / new stream title
     void DetectLanguage();
     void OnUiNotify();
     void RestartAimp();
+    void ShowPopup(const std::wstring& title, const std::wstring& text);
 
     void Poll();
 
@@ -221,6 +224,11 @@ private:
     double lastPos_ = 0;
     std::chrono::steady_clock::time_point lastPoll_ = std::chrono::steady_clock::now();
     bool forcePush_ = true;
+    // the track's tags are read again only when something may have changed (a dozen COM calls each time)
+    TrackInfo lastTrack_;
+    double lastInfoDur_ = 0;
+    bool trackDirty_ = true;
+    std::chrono::steady_clock::time_point lastTrackRead_{};
 };
 
 // ------------------------------------------------------------------------------------------------ frame impl
@@ -280,6 +288,19 @@ void WINAPI EventHook::CoreMessage(DWORD message, INT32, void*, HRESULT*) {
         case AIMP_MSG_EVENT_LANGUAGE:
             owner_->DetectLanguage();
             break;
+        default:
+            break;
+    }
+    switch (message) {   // the tags have to be read again (Windows: the next timer tick does that)
+        case AIMP_MSG_EVENT_STREAM_START:
+        case AIMP_MSG_EVENT_STREAM_START_SUBTRACK:
+        case AIMP_MSG_EVENT_PLAYING_FILE_INFO:
+            owner_->OnTrackEvent();
+            break;
+        default:
+            break;
+    }
+    switch (message) {
 #ifndef _WIN32
         case AIMP_MSG_EVENT_PLAYER_STATE:
         case AIMP_MSG_EVENT_STREAM_START:
@@ -459,7 +480,30 @@ void Plugin::OnUiNotify() {
         dispatcher_->Send(AIMP_MSG_CMD_SHOW_NOTIFICATION, 0, const_cast<char*>(u.c_str()));
 #endif
     }
+    std::wstring title, body;
+    if (update::TakePopup(title, body)) ShowPopup(title, body);
     if (update::TakeRestart()) RestartAimp();
+}
+
+// AIMP's own message window (follows the skin, also on Linux); AIMP 3 has none -> notice in AIMP's display
+void Plugin::ShowPopup(const std::wstring& title, const std::wstring& text) {
+    static bool showing = false;   // the window is modal: timer / UI tasks keep running meanwhile
+    if (showing) return;
+    showing = true;
+    ComPtr<IAIMPUIMessageDialog> dialog;
+    HRESULT hr = E_NOINTERFACE;
+    if (core_ && SUCCEEDED(core_->QueryInterface(IID_IAIMPUIMessageDialog, dialog.putVoid())) && dialog) {
+        IAIMPString* caption = aimp::MakeString(core_, title);
+        IAIMPString* message = aimp::MakeString(core_, text);
+        hr = dialog->Execute(HWND(0), caption, message, 0x40 /* MB_ICONINFORMATION */);
+        if (caption) caption->Release();
+        if (message) message->Release();
+    }
+    showing = false;
+    if (FAILED(hr)) {
+        util::Log(L"No message window (0x%08X) - notice in AIMP's display instead", (unsigned)hr);
+        update::PopupFailed();
+    }
 }
 
 // AIMP has installed the update: it only loads the new plugin after a restart (by itself it just offers
@@ -468,6 +512,7 @@ void Plugin::RestartAimp() {
     ComPtr<IAIMPServiceShutdown> shutdown;
     HRESULT hr = E_NOINTERFACE;
     if (core_ && SUCCEEDED(core_->QueryInterface(IID_IAIMPServiceShutdown, shutdown.putVoid())) && shutdown) {
+        update::RestartingFor();   // the new AIMP's popup then says why it restarted
         IAIMPString* params = aimp::MakeString(core_, std::wstring());   // command line of the new AIMP: none
         hr = shutdown->Restart(params);
         if (params) params->Release();
@@ -556,8 +601,8 @@ bool Plugin::ReadTrack(TrackInfo& t, double& duration) {
 
 void Plugin::Poll() {
     using namespace std::chrono;
+    OnUiNotify();   // settings page (if open): status, previews (may show a modal window)
     const auto now = steady_clock::now();
-    OnUiNotify();   // settings page (if open): status, previews
 
     int st = ReadState();
     PlayState ps = (st == kPlayerPlaying) ? PlayState::Playing : (st == kPlayerPaused ? PlayState::Paused : PlayState::Stopped);
@@ -570,28 +615,36 @@ void Plugin::Poll() {
     if (ps == PlayState::Stopped) {
         if (lastState_ != PlayState::Stopped) push = true;
         s.trackId = lastId_;
+        trackDirty_ = true;   // the next track is read at once
     } else {
         double pos = 0, dur = 0;
         if (FAILED(player_->GetPosition(&pos)) || !std::isfinite(pos) || pos < 0)
             pos = ReadReal(AIMP_MSG_PROPERTY_PLAYER_POSITION);
         if (FAILED(player_->GetDuration(&dur)) || !std::isfinite(dur) || dur < 0) dur = 0;
-        TrackInfo t;
-        double infoDur = 0;
-        if (!ReadTrack(t, infoDur)) return;
-        if (dur <= 0) dur = infoDur;
-        if (dur <= 0) dur = ReadReal(AIMP_MSG_PROPERTY_PLAYER_DURATION);
-
-        uint64_t id = util::Fnv1a(t.fileName + L"|" + t.artist + L"|" + t.title + L"|" + t.album + L"|" + t.playlist);
-        if (id != lastId_) push = true;                     // new track
         if (ps != lastState_) push = true;                  // play <-> pause
         double expected = lastPos_ + (lastState_ == PlayState::Playing ? duration<double>(now - lastPoll_).count() : 0.0);
-        if (std::fabs(pos - expected) > 1.5) push = true;   // user seeked / track restarted
+        if (std::fabs(pos - expected) > 1.5) push = true;   // user seeked / track restarted / next track
+
+        // tags: on AIMP's track events, on any change above and every 3 s (title of a radio stream, edited tags)
+        if (push || trackDirty_ || lastId_ == 0 || now - lastTrackRead_ >= seconds(3)) {
+            TrackInfo t;
+            double infoDur = 0;
+            if (!ReadTrack(t, infoDur)) return;
+            trackDirty_ = false;
+            lastTrackRead_ = now;
+            lastInfoDur_ = infoDur;
+            uint64_t id = util::Fnv1a(t.fileName + L"|" + t.artist + L"|" + t.title + L"|" + t.album + L"|" + t.playlist);
+            if (id != lastId_) push = true;                 // new track
+            lastId_ = id;
+            lastTrack_ = std::move(t);
+        }
+        if (dur <= 0) dur = lastInfoDur_;
+        if (dur <= 0) dur = ReadReal(AIMP_MSG_PROPERTY_PLAYER_DURATION);
 
         s.position = pos;
         s.duration = dur;
-        s.trackId = id;
-        s.track = std::move(t);
-        lastId_ = id;
+        s.trackId = lastId_;
+        if (push) s.track = lastTrack_;
         lastPos_ = pos;
     }
 

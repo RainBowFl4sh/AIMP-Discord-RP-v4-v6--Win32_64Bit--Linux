@@ -25,10 +25,10 @@ namespace {
 enum Ids {
     // General
     IDC_ENABLE = 200, IDC_TYPE, IDC_STATUSDISP, IDC_TIMESTAMPS, IDC_PAUSED, IDC_PAUSEDMIN, IDC_HIDESTREAMS, IDC_EXCLUDE,
-    IDC_STATUS,
+    IDC_STATUS, IDC_APPNAME,
     // Display
     IDC_DETAILS = 300, IDC_STATE, IDC_LARGETEXT, IDC_SMALLTEXT, IDC_SMALLICON, IDC_BARLEN, IDC_REFRESH, IDC_TITLELINK,
-    IDC_TITLELINKCUSTOM, IDC_TITLELINKURL, IDC_PREVIEW,
+    IDC_TITLELINKCUSTOM, IDC_TITLELINKURL, IDC_PREVIEW, IDC_ROTATE,
     // Cover art
     IDC_COVER = 400, IDC_EMBEDDED, IDC_FOLDER, IDC_FOLDERNAMES, IDC_UPLOADHOST, IDC_IMGURID, IDC_PREFERLOCAL,
     IDC_CLEARCACHE, IDC_CACHEINFO, IDC_COVERIMG, IDC_COVERINFO, IDC_COVERLINK,
@@ -589,7 +589,9 @@ void SettingsPage::BuildGeneral(IAIMPUIWinControl* p) {
     Label(p, "Gen.ActivityType", 10, y + 3, 195);
     Combo(p, IDC_TYPE, {"Gen.TypeListening", "Gen.TypePlaying"}, 210, y, 255);              y += 30;
     Label(p, "Gen.StatusText", 10, y + 3, 195);
-    Combo(p, IDC_STATUSDISP, {"Gen.StatusApp", "Gen.StatusState", "Gen.StatusDetails"}, 210, y, 255); y += 32;
+    Combo(p, IDC_STATUSDISP, {"Gen.StatusApp", "Gen.StatusState", "Gen.StatusDetails"}, 210, y, 255); y += 30;
+    Label(p, "Gen.AppName", 10, y + 3, 195);
+    Edit(p, IDC_APPNAME, 210, y, 255);                                                      y += 32;
     Check(p, IDC_TIMESTAMPS, "Gen.Timestamps", 10, y, 455);                                 y += 26;
     Label(p, "Gen.Paused", 10, y + 3, 195);
     Combo(p, IDC_PAUSED, {"Gen.PausedShow", "Gen.PausedHide"}, 210, y, 255);                y += 30;
@@ -606,14 +608,15 @@ void SettingsPage::BuildDisplay(IAIMPUIWinControl* p) {
     Label(p, "Disp.Details", 10, y + 3, 145);   Edit(p, IDC_DETAILS, 160, y, 305);         y += 26;
     Label(p, "Disp.State", 10, y + 3, 145);     Edit(p, IDC_STATE, 160, y, 305);           y += 26;
     Label(p, "Disp.LargeText", 10, y + 3, 145); Edit(p, IDC_LARGETEXT, 160, y, 305);       y += 26;
-    Label(p, "Disp.SmallText", 10, y + 3, 145); Edit(p, IDC_SMALLTEXT, 160, y, 305);       y += 28;
+    Label(p, "Disp.SmallText", 10, y + 3, 145); Edit(p, IDC_SMALLTEXT, 160, y, 305);       y += 26;
     Check(p, IDC_SMALLICON, "Disp.SmallIcon", 10, y, 455);                                  y += 24;
     Label(p, "Disp.BarLength", 10, y + 3, 150); Edit(p, IDC_BARLEN, 165, y, 45);
-    Label(p, "Disp.Refresh", 230, y + 3, 170);  Edit(p, IDC_REFRESH, 405, y, 60);           y += 28;
-    Label(p, "Disp.Placeholders", 10, y, 455, 46);                                          y += 48;
-    Check(p, IDC_TITLELINK, "Disp.TitleLink", 10, y, 455);                                  y += 24;
+    Label(p, "Disp.Refresh", 230, y + 3, 170);  Edit(p, IDC_REFRESH, 405, y, 60);           y += 26;
+    Label(p, "Disp.Rotate", 10, y + 3, 390);    Edit(p, IDC_ROTATE, 405, y, 60);            y += 26;
+    Label(p, "Disp.Placeholders", 10, y, 455, 46);                                          y += 47;
+    Check(p, IDC_TITLELINK, "Disp.TitleLink", 10, y, 455);                                  y += 22;
     Check(p, IDC_TITLELINKCUSTOM, "Disp.OwnLink", 28, y + 1, 127);
-    Edit(p, IDC_TITLELINKURL, 160, y, 305);                                                 y += 28;
+    Edit(p, IDC_TITLELINKURL, 160, y, 305);                                                 y += 26;
     // live preview: what Discord will show (drawn in OnDraw)
     Paint(p, IDC_PREVIEW, 10, y, kPreviewWidth, kPreviewHeight);
 }
@@ -799,6 +802,7 @@ void SettingsPage::Load(const Config* from) {
     SetCheck(IDC_ENABLE, c.enabled);
     SetSel(IDC_TYPE, c.activityType == 0 ? 1 : 0);
     SetSel(IDC_STATUSDISP, c.statusDisplay);
+    SetText(IDC_APPNAME, c.activityName);
     SetCheck(IDC_TIMESTAMPS, c.showTimestamps);
     SetSel(IDC_PAUSED, c.pausedBehavior == 0 ? 0 : 1);
     SetText(IDC_PAUSEDMIN, std::to_wstring(c.clearAfterPaused));
@@ -812,6 +816,7 @@ void SettingsPage::Load(const Config* from) {
     SetCheck(IDC_SMALLICON, c.showSmallIcon);
     SetText(IDC_BARLEN, std::to_wstring(c.barLength));
     SetText(IDC_REFRESH, std::to_wstring(c.refreshSeconds));
+    SetText(IDC_ROTATE, std::to_wstring(c.rotateSeconds));
     SetCheck(IDC_TITLELINK, c.titleLink);
     SetCheck(IDC_TITLELINKCUSTOM, c.titleLinkCustom);
     SetText(IDC_TITLELINKURL, c.titleLinkUrl);
@@ -853,6 +858,7 @@ void SettingsPage::Collect(Config& c) const {
     c.enabled          = GetCheck(IDC_ENABLE);
     c.activityType     = (GetSel(IDC_TYPE) == 1) ? 0 : 2;
     c.statusDisplay    = std::max(0, std::min(2, GetSel(IDC_STATUSDISP)));
+    c.activityName     = GetText(IDC_APPNAME);
     c.showTimestamps   = GetCheck(IDC_TIMESTAMPS);
     c.pausedBehavior   = (GetSel(IDC_PAUSED) == 0) ? 0 : 1;
     c.clearAfterPaused = std::max(0, GetInt(IDC_PAUSEDMIN, 0));
@@ -866,6 +872,7 @@ void SettingsPage::Collect(Config& c) const {
     c.showSmallIcon   = GetCheck(IDC_SMALLICON);
     c.barLength       = std::max(4, std::min(30, GetInt(IDC_BARLEN, 12)));
     c.refreshSeconds  = std::max(5, GetInt(IDC_REFRESH, 15));
+    c.rotateSeconds   = std::max(5, std::min(3600, GetInt(IDC_ROTATE, 5)));
     c.titleLink       = GetCheck(IDC_TITLELINK);
     c.titleLinkCustom = GetCheck(IDC_TITLELINKCUSTOM);
     c.titleLinkUrl    = util::Trim(GetText(IDC_TITLELINKURL));
@@ -1060,7 +1067,14 @@ void SettingsPage::Refresh() {
         previewDirty_ = true;
     }
     const int tab = ActiveTab();
-    if (previewDirty_ || (s.state == PlayState::Playing && (tab == kTabDisplay || tab < 0))) {
+    const bool display = tab == kTabDisplay || tab < 0;
+    bool rotating = false;   // texts with variants switch while the page is open (also for the example track)
+    if (display && s.state != PlayState::Playing) {
+        Config shown = config::Get();
+        Collect(shown);
+        rotating = HasVariants(shown);
+    }
+    if (previewDirty_ || ((s.state == PlayState::Playing || rotating) && display)) {
         previewDirty_ = false;
         if (IAIMPUIControl* pb = Item(IDC_PREVIEW)) pb->Invalidate();
     }
@@ -1203,7 +1217,9 @@ void SettingsPage::BuildPreview() {
     }
     const auto pausedFor = s.state == PlayState::Paused ? std::chrono::steady_clock::now() - s.stamp
                                                         : std::chrono::steady_clock::duration::zero();
-    const ActivityTexts t = ComputeTexts(c, s, pausedFor);
+    const int step = example ? (int)(util::TickMs() / ((uint64_t)std::max(5, c.rotateSeconds) * 1000))
+                             : Worker().RotationStep(c);
+    const ActivityTexts t = ComputeTexts(c, s, pausedFor, step);
     const PresenceStatus st = Worker().Status();
 
     PreviewData& d = preview_;
@@ -1212,6 +1228,7 @@ void SettingsPage::BuildPreview() {
     d.message = d.hidden ? HiddenText(t.hidden) : (example ? T("Prev.Example") : std::wstring());
     std::wstring app = c.useCustomApp ? jobs::AppName(c.clientId) : std::wstring(L"AIMP");
     if (app.empty()) app = T("Prev.YourApp");
+    if (!t.name.empty()) app = util::FromUtf8(t.name);   // own name instead of the application's
     d.header = util::Subst(T(c.activityType == 0 ? "Prev.Playing" : "Prev.Listening"), app);
     d.details = util::FromUtf8(t.details);
     d.state = util::FromUtf8(t.state);

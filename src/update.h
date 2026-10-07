@@ -24,5 +24,9 @@ void SetPluginsDir(const std::wstring& dir);  // main thread, at start: AIMP's p
 uint64_t WatchInstall();   // jobs thread: has AIMP installed the opened package? ms until the next look, 0 = done
 bool TakeRestart();        // main thread: true once when AIMP has to be restarted to load the installed update
 void RestartFailed();      // main thread: AIMP could not be restarted - the user is asked to do it
+void RestartingFor();      // main thread, right before the restart: remembered, so the popup can say why
+void StartupNotice();      // jobs thread, a few seconds after the start: new version installed -> popup
+bool TakePopup(std::wstring& title, std::wstring& text);   // main thread: the "update installed" window, once
+void PopupFailed();        // main thread: no message window available -> notice in AIMP's display
 
 }  // namespace update

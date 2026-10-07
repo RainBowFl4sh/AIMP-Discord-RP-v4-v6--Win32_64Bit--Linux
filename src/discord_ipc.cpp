@@ -119,7 +119,9 @@ bool DiscordIpc::OpenChannel() {
 
 bool DiscordIpc::OpenUnixSocketUnderWine() {
     if (!Syscall()) return false;
-    std::string runtime = util::ToUtf8(util::GetEnv(L"XDG_RUNTIME_DIR"));   // Wine passes the Unix environment
+    // Wine passes the Unix environment, newer Wine versions (10+) the XDG_ variables as WINE_HOST_XDG_...
+    std::string runtime = util::ToUtf8(util::GetEnv(L"WINE_HOST_XDG_RUNTIME_DIR"));
+    if (runtime.empty() || runtime[0] != '/') runtime = util::ToUtf8(util::GetEnv(L"XDG_RUNTIME_DIR"));
     if (runtime.empty() || runtime[0] != '/') runtime = "/run/user/" + std::to_string((unsigned long)Sys(NR_getuid));
     std::string tmp = util::ToUtf8(util::GetEnv(L"TMPDIR"));
     if (!tmp.empty() && tmp[0] != '/') tmp.clear();

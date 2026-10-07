@@ -68,6 +68,13 @@ grep -q "^/x0.at/ .* -> https://x0.at/" "$TMP/web.log" || { echo "FAILED: x0.at 
 grep -q 'T3st.png?r=1' "$TMP/frames.log" || { echo "FAILED: cover not repaired for Discord"; grep -o 'large_image[^,]*' "$TMP/frames.log" | tail -5; exit 1; }
 rm -f "$TMP/web.log.catbox-broken" "$TMP/web.log.proxy-broken"
 
+# texts with variants ("a || b") switch every RotateSeconds; own name instead of "AIMP"; title changes; tag reads
+printf '[DiscordRPC]\r\nConfigVersion=7\r\nCoverEnabled=0\r\nDetails=%%artist%% || %%title%%\r\nState=%%title%%\r\nActivityName=%%album%%\r\nRotateSeconds=5\r\nUpdateCheck=0\r\n' > "$APPDATA_DIR/AIMP/DiscordRPC.ini"
+before=$(wc -l < "$TMP/frames.log")
+(cd "$TMP" && AIMP_TEST_ROTATE=1 wine host_test.exe aimp_discord_rpc.dll > "$TMP/rotate.out")
+tail -n +$((before + 1)) "$TMP/frames.log" > "$TMP/rotate.frames"
+python3 "$HERE/check_rotation.py" "$TMP/rotate.frames" "$TMP/rotate.out" || exit 1
+
 for lang in "ru:Русский" "de:Deutsch" "uk:Українська"; do
     rm -rf "$APPDATA_DIR/AIMP"
     mkdir -p "$APPDATA_DIR/AIMP" "$OUT/${lang%%:*}"

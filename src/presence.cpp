@@ -4,6 +4,7 @@
 #include <cmath>
 #include <ctime>
 #include <map>
+#include <vector>
 
 #include "i18n.h"
 #include "util.h"
@@ -58,7 +59,7 @@ bool IsHttpUrl(const std::wstring& u) {
 }
 
 bool NeedsPeriodicRefresh(const Config& c) {
-    for (const std::wstring* s : {&c.details, &c.state, &c.largeText, &c.smallText}) {
+    for (const std::wstring* s : {&c.activityName, &c.details, &c.state, &c.largeText, &c.smallText}) {
         std::wstring l = util::Lower(*s);
         if (l.find(L"%pos%") != std::wstring::npos || l.find(L"%bar%") != std::wstring::npos ||
             l.find(L"%percent%") != std::wstring::npos)
@@ -69,7 +70,26 @@ bool NeedsPeriodicRefresh(const Config& c) {
 
 std::string Quote(const std::string& s) { return "\"" + util::JsonEscape(s) + "\""; }
 
+// "%artist% || %title%": the variant for this step (texts without "||" stay as they are)
+std::wstring Variant(const std::wstring& tmpl, int step) {
+    if (tmpl.find(L"||") == std::wstring::npos) return tmpl;
+    std::vector<std::wstring> parts;
+    for (size_t from = 0;;) {
+        const size_t at = tmpl.find(L"||", from);
+        parts.push_back(util::Trim(tmpl.substr(from, at == std::wstring::npos ? std::wstring::npos : at - from)));
+        if (at == std::wstring::npos) break;
+        from = at + 2;
+    }
+    return parts[(size_t)(step < 0 ? 0 : step) % parts.size()];
+}
+
 }  // namespace
+
+bool HasVariants(const Config& c) {
+    for (const std::wstring* s : {&c.activityName, &c.details, &c.state, &c.largeText, &c.smallText})
+        if (s->find(L"||") != std::wstring::npos) return true;
+    return false;
+}
 
 bool PresenceStatus::operator==(const PresenceStatus& o) const {
     return kind == o.kind && error == o.error && errorDetail == o.errorDetail && endpoint == o.endpoint &&
@@ -79,7 +99,7 @@ bool PresenceStatus::operator==(const PresenceStatus& o) const {
            coverSearching == o.coverSearching;
 }
 
-ActivityTexts ComputeTexts(const Config& c, const Snapshot& s, clock_t_::duration pausedFor) {
+ActivityTexts ComputeTexts(const Config& c, const Snapshot& s, clock_t_::duration pausedFor, int rotateStep) {
     ActivityTexts t;
     const bool playing = s.state == PlayState::Playing;
     if (!c.enabled)                                                     t.hidden = Hidden::Disabled;
@@ -116,10 +136,11 @@ ActivityTexts ComputeTexts(const Config& c, const Snapshot& s, clock_t_::duratio
     v[L"bar"]         = MakeBar(s.duration > 0 ? pos / s.duration : 0.0, c.barLength);
     v[L"status"]      = i18n::T(playing ? "Status.Playing" : "Status.Paused");
 
-    t.details   = Field(Expand(c.details, v, false));
-    t.state     = Field(Expand(c.state, v, false));
-    t.largeText = Field(Expand(c.largeText, v, false));
-    t.smallText = c.showSmallIcon ? Field(Expand(c.smallText, v, false)) : std::string();
+    t.name      = Field(Expand(Variant(c.activityName, rotateStep), v, false));
+    t.details   = Field(Expand(Variant(c.details, rotateStep), v, false));
+    t.state     = Field(Expand(Variant(c.state, rotateStep), v, false));
+    t.largeText = Field(Expand(Variant(c.largeText, rotateStep), v, false));
+    t.smallText = c.showSmallIcon ? Field(Expand(Variant(c.smallText, rotateStep), v, false)) : std::string();
     if (t.details.empty() && t.state.empty()) t.details = Field(v[L"filename"]);
 
     // clickable title (Discord: details_url, max. 256 chars)
@@ -209,6 +230,12 @@ PresenceStatus PresenceWorker::Status() {
     return status_;
 }
 
+int PresenceWorker::RotationStep(const Config& c) const {
+    if (!HasVariants(c)) return 0;
+    const uint64_t start = rotStartMs_.load(), now = util::TickMs();
+    return now > start ? (int)((now - start) / ((uint64_t)std::max(5, c.rotateSeconds) * 1000)) : 0;
+}
+
 Snapshot PresenceWorker::LastSnapshot() {
     std::lock_guard<std::mutex> lk(mu_);
     return snap_;
@@ -266,11 +293,12 @@ void PresenceWorker::CheckShownCover(std::chrono::steady_clock::time_point now) 
 }
 
 bool PresenceWorker::BuildActivity(const Config& c, const Snapshot& s, std::string& out) {
-    const ActivityTexts t = ComputeTexts(c, s, clock_t_::now() - pausedSince_);
+    const ActivityTexts t = ComputeTexts(c, s, clock_t_::now() - pausedSince_, RotationStep(c));
     if (t.hidden != Hidden::No) return false;
 
     std::string a = "{\"type\":" + std::to_string(c.activityType) + ",\"status_display_type\":" +
                     std::to_string(c.statusDisplay);
+    if (!t.name.empty()) a += ",\"name\":" + Quote(t.name);   // Discord shows it instead of the application's name
     if (!t.details.empty()) a += ",\"details\":" + Quote(t.details);
     if (!t.state.empty()) a += ",\"state\":" + Quote(t.state);
     if (!t.detailsUrl.empty()) a += ",\"details_url\":" + Quote(t.detailsUrl);
@@ -430,6 +458,10 @@ void PresenceWorker::Run() {
             if (snap.state == PlayState::Paused) pausedSince_ = now;
             prevState_ = snap.state;
         }
+        if (snap.trackId != rotTrack_) {   // new track: texts with variants start with the first one
+            rotTrack_ = snap.trackId;
+            rotStartMs_ = util::TickMs();
+        }
         if (!want) {
             if (snap.state == PlayState::Playing && NeedsPeriodicRefresh(cfg) &&
                 now - lastSend_ >= seconds(cfg.refreshSeconds))
@@ -437,6 +469,8 @@ void PresenceWorker::Run() {
             else if (snap.state == PlayState::Paused && shown_ && cfg.clearAfterPaused > 0 &&
                      now - pausedSince_ >= minutes(cfg.clearAfterPaused))
                 want = true;
+            else if (shown_ && snap.state != PlayState::Stopped && HasVariants(cfg) && RotationStep(cfg) != sentStep_)
+                want = true;   // the next variant of the texts is due
         }
         if (!want) continue;
         if (!justConnected && now - lastSend_ < seconds(2)) {   // Discord rate limit: coalesce updates
@@ -483,6 +517,7 @@ void PresenceWorker::Run() {
             shown_ = false;
         }
         lastSend_ = steady_clock::now();
+        sentStep_ = RotationStep(cfg);
         st_.lastSent = util::UnixTime();
         st_.visible = shown_;
         st_.coverSearching = show && needResolve;

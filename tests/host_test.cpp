@@ -259,6 +259,7 @@ public:
     HRESULT WINAPI GetVolume(SINGLE*) override { return E_NOTIMPL; }
     HRESULT WINAPI SetVolume(const SINGLE) override { return E_NOTIMPL; }
     HRESULT WINAPI GetInfo(IAIMPFileInfo** fi) override {
+        ++infoReads;   // how often the plugin reads the track's tags (cost per poll)
         if (!info) return E_FAIL;
         info->AddRef();
         *fi = info;
@@ -271,6 +272,7 @@ public:
         return S_OK;
     }
     INT32 WINAPI GetState() override { return state; }
+    int infoReads = 0;
     HRESULT WINAPI Pause() override { return E_NOTIMPL; }
     HRESULT WINAPI Resume() override { return E_NOTIMPL; }
     HRESULT WINAPI Stop() override { return E_NOTIMPL; }
@@ -428,6 +430,19 @@ public:
     HRESULT WINAPI Shutdown(DWORD) override { return E_NOTIMPL; }
 };
 
+// ---- AIMP's message window: the plugin shows "update installed" with it
+class MessageDialog : public Obj<IAIMPUIMessageDialog> {
+public:
+    mockui::TStr caption, text;
+    int shown = 0;
+    HRESULT WINAPI Execute(HWND, IAIMPString* c, IAIMPString* t, DWORD) override {
+        caption = c ? mockui::TStr(c->GetData(), c->GetLength()) : mockui::TStr();
+        text = t ? mockui::TStr(t->GetData(), t->GetLength()) : mockui::TStr();
+        ++shown;
+        return S_OK;
+    }
+};
+
 class Core : public Obj<IAIMPCore> {
 public:
     Player* player = new Player();
@@ -435,6 +450,7 @@ public:
     Threads* threads = new Threads();
     Mui* mui = new Mui();
     ShutdownService* shutdown = new ShutdownService();
+    MessageDialog* message = new MessageDialog();
     mockui::Service ui;
     mockui::OptionsService options;
     IAIMPOptionsDialogFrame* frame = nullptr;
@@ -444,6 +460,7 @@ public:
         if (Same(riid, IID_IAIMPServiceThreads)) { threads->AddRef(); *ppv = threads; return S_OK; }
         if (Same(riid, IID_IAIMPServiceMUI)) { mui->AddRef(); *ppv = mui; return S_OK; }
         if (Same(riid, IID_IAIMPServiceShutdown)) { shutdown->AddRef(); *ppv = shutdown; return S_OK; }
+        if (Same(riid, IID_IAIMPUIMessageDialog)) { message->AddRef(); *ppv = message; return S_OK; }
         if (Same(riid, IID_IAIMPServiceUI)) { *ppv = static_cast<IAIMPServiceUI*>(&ui); return S_OK; }
         if (Same(riid, IID_IAIMPServiceOptionsDialog)) { *ppv = static_cast<IAIMPServiceOptionsDialog*>(&options); return S_OK; }
         return Obj<IAIMPCore>::QueryInterface(riid, ppv);
@@ -1014,6 +1031,23 @@ bool HasPicture(Core* core, int nth) {
 int RunTests(Core* core) {
     const bool uiOnly = Env("AIMP_TEST_UI_ONLY") == "1";
     const bool upload = Env("AIMP_TEST_UPLOAD") == "1";   // the track's folder image goes to (fake) catbox.moe
+    if (Env("AIMP_TEST_ROTATE") == "1") {   // texts with variants: Discord gets them one after the other
+        core->player->state = 2;
+        core->player->pos = 30;
+        core->player->dur = 354;
+        core->dispatcher->Fire(AIMP_MSG_EVENT_PLAYER_STATE);
+        Tick(core, 13);
+        printf("tag reads: %d in 13 s\n", core->player->infoReads);
+        // a radio stream changes its title without a new track: shown within a few seconds
+        core->player->info->text[AIMP_FILEINFO_PROPID_TITLE] = T("Radio Song");
+        Tick(core, 5);
+        // next track (AIMP reports it): shown at once
+        core->player->info->text[AIMP_FILEINFO_PROPID_TITLE] = T("Next Song");
+        core->player->pos = 0;
+        core->dispatcher->Fire(AIMP_MSG_EVENT_STREAM_START);
+        Tick(core, 3);
+        return -1;   // no settings page in this run: just finalize
+    }
     if (TestSettingsPage(core, uiOnly || upload)) return 1;
     if (upload) {
         core->player->state = 2;
@@ -1039,10 +1073,11 @@ int RunTests(Core* core) {
         // status line, cover found online (fake Deezer) with its source, pictures, log
         if (!WaitForLabel(core, T("connected to Discord as Test User"), 5)) return Fail("status line not updated");
         if (!WaitForLabel(core, T("found on Deezer"), 10)) return Fail("cover source not shown");
-        // the test INI says the last start was 1.4.1: first start of this version -> "updated" notice in AIMP
-        if (core->dispatcher->notification.find(T("was updated to version")) == TStr::npos)
-            return Fail("no notice after the update");
-        printf("update: notice \"%s\"\n", Narrow(core->dispatcher->notification).c_str());
+        // the test INI says the last start was 1.4.1: first start of this version -> "update installed" window
+        if (core->message->shown != 1 || core->message->text.find(T("was updated to version")) == TStr::npos ||
+            core->message->text.find(T("About")) == TStr::npos)
+            return Fail("no \"update installed\" window after the update");
+        printf("update: window \"%s\": %s\n", Narrow(core->message->caption).c_str(), Narrow(core->message->text).c_str());
         for (int i = 0; i < 20 && !HasPicture(core, 0); ++i) Tick(core, 1);
         if (!HasPicture(core, 0)) return Fail("cover picture not shown on the Cover tab");
         // the author picture on the About tab: drawn with rounded corners into its paint box
@@ -1168,7 +1203,7 @@ int main(int argc, char** argv) {
     const int rc = RunTests(core);
     if (rc) {
         plugin->Finalize();   // stop the plugin's threads before leaving
-        return rc;
+        return rc < 0 ? 0 : rc;
     }
 
     core->frame->DestroyFrame();
