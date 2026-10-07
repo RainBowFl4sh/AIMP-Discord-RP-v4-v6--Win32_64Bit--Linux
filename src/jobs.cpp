@@ -34,12 +34,16 @@ void Run() {
     // first update check 20 s after AIMP started (tests: 1 s), then hourly
     uint64_t next = util::TickMs() + (util::GetEnv(L"AIMP_DISCORD_RPC_TEST_URL").empty() ? 20000 : 1000);
     uint64_t look = 0;   // next look whether AIMP has installed an opened update (0: nothing to watch)
+    // "updated" window a few seconds after the start, when AIMP's window is up (tests: at once)
+    uint64_t notice = util::TickMs() + (util::GetEnv(L"AIMP_DISCORD_RPC_TEST_URL").empty() ? 3000 : 200);
     for (;;) {
         std::function<void()> job;
         {
             std::unique_lock<std::mutex> lk(g_mu);
             while (!g_stopping && g_queue.empty()) {
-                const uint64_t now = util::TickMs(), due = look && look < next ? look : next;
+                uint64_t due = look && look < next ? look : next;
+                if (notice && notice < due) due = notice;
+                const uint64_t now = util::TickMs();
                 if (now >= due) break;
                 g_cv.wait_for(lk, std::chrono::milliseconds(due - now));
             }
@@ -48,6 +52,10 @@ void Run() {
                 job = std::move(g_queue.front());
                 g_queue.pop_front();
             }
+        }
+        if (notice && util::TickMs() >= notice) {
+            notice = 0;
+            update::StartupNotice();
         }
         if (job) {
             job();

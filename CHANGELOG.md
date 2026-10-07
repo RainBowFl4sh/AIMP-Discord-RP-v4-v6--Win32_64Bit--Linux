@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.5.4
+
+### New
+- **Rotating texts**: a text field can hold several texts separated by `||`, e.g. *First line*
+  `%artist% || %title%`. Discord then shows them one after the other - the artist, after a few seconds the title,
+  then the artist again, and so on. *Display* tab: "Switch between texts separated by || every (s)" (5 s by default
+  and at least 5 s, because Discord takes at most 5 updates in 20 seconds). Works for both lines and both tooltips;
+  every new track starts with the first text, and the live preview switches as well
+- **"Update installed" window**: after a new version was installed - by the update check or by hand - a window says
+  so once (in the plugin's language) and where to find what is new (*About* tab). When the plugin restarted AIMP for
+  the update, the window says that too, so nobody wonders why AIMP just restarted. AIMP 3 shows the short notice in
+  its display instead
+- **Own name instead of "AIMP"**: *General* tab, "Name instead of "AIMP"". Discord shows this text instead of the
+  application name - in "Listening to ..." on your profile and, with "Discord status text shows: Activity name", in
+  the member list. Placeholders work (e.g. `%artist%` or `%title%`), and so do several texts with `||`. Empty = the
+  application's name as before. No own Discord application is needed for this
+
+### Changed
+- Less work while music plays: the track's tags are read again only when AIMP reports a new track, after a jump in
+  the position and every 3 seconds (titles of internet radio streams) - before, on every check (twice a second on
+  Windows)
+- Smaller plugin files: built without C++ exception tables and type information (Windows x64 about 7 % smaller)
+
+### Fixed
+- Windows AIMP in Wine 10 or newer: the plugin did not find the Linux Discord client when `XDG_RUNTIME_DIR` is not
+  `/run/user/<id>`. Newer Wine passes that variable on as `WINE_HOST_XDG_RUNTIME_DIR`; the plugin now reads both
+
 ## 1.5.3
 
 ### New

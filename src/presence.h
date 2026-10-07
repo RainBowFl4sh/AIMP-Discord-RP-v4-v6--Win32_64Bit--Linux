@@ -33,10 +33,14 @@ struct ActivityTexts {
     Hidden      hidden  = Hidden::No;
     bool        playing = false;
     double      pos = 0, dur = 0;
+    std::string name;                                   // instead of the application name, "" = the app's name
     std::string details, state, largeText, smallText;   // UTF-8, "" = line not shown
     std::string detailsUrl;                             // clickable title, "" = none
 };
-ActivityTexts ComputeTexts(const Config& c, const Snapshot& s, std::chrono::steady_clock::duration pausedFor);
+// rotateStep: which variant of texts with several variants ("%artist% || %title%") is shown
+ActivityTexts ComputeTexts(const Config& c, const Snapshot& s, std::chrono::steady_clock::duration pausedFor,
+                           int rotateStep = 0);
+bool HasVariants(const Config& c);   // a text field contains "||"
 
 struct PresenceStatus {
     enum Kind { Starting, Disabled, NotConnected, Connected } kind = Starting;
@@ -70,6 +74,7 @@ public:
     void Reconnect();                 // drop the connection and connect again at once
     PresenceStatus Status();
     Snapshot LastSnapshot();
+    int RotationStep(const Config& c) const;   // current variant step (counted from the start of the track)
 
 private:
     void Run();
@@ -115,6 +120,9 @@ private:
     void          CheckShownCover(std::chrono::steady_clock::time_point now);
     uint64_t      lastConfigCheck_ = 0;
     unsigned      nextWaitMs_ = 1000;
+    std::atomic<uint64_t> rotStartMs_{0};   // TickMs when the current track started (variants start over)
+    uint64_t      rotTrack_ = 0;
+    int           sentStep_ = -1;           // variant step of the last update sent
 };
 
 PresenceWorker& Worker();   // the single instance

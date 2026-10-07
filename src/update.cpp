@@ -22,6 +22,7 @@ std::mutex   g_mu;
 State        g_state;
 Release      g_release;            // result of the last successful check
 std::wstring g_notify, g_notified;
+std::wstring g_popupTitle, g_popupText;   // "update installed" window, shown once on the main thread
 std::wstring g_pluginsDir;         // AIMP's plugin folder
 bool         g_restart = false;    // the update is installed: the main thread restarts AIMP
 bool         g_checkedThisSession = false;   // jobs thread only
@@ -271,16 +272,6 @@ void Install() {
 void Tick() {
     if (!g_cleaned) {   // packages of versions that are installed now are not needed any more
         g_cleaned = true;
-        // first start after AIMP installed a new version (and restarted): say so once
-        const std::wstring last = config::Get().lastVersion;
-        if (last != kCurrent) {
-            config::Update([](Config& c) { c.lastVersion = kCurrent; });
-            if (!last.empty() && util::CompareVersions(kCurrent, last) > 0) {
-                util::Log(L"Updated from %ls to %ls", last.c_str(), kCurrent);
-                std::lock_guard<std::mutex> lk(g_mu);
-                g_notify = util::Subst(i18n::T("Upd.Installed"), kCurrent);
-            }
-        }
         const std::wstring dir = config::CacheDir();
         for (const std::wstring& name : util::ListFiles(dir, L".aimppack"))
             if (util::CompareVersions(util::FindVersion(name), kCurrent) <= 0) util::RemoveFile(dir + util::kPathSep + name);
@@ -295,6 +286,52 @@ void Tick() {
     if (!due) return;
     g_checkedThisSession = true;
     CheckSync(true);
+}
+
+void StartupNotice() {
+    // first start after a new version was installed (by the update check or by hand): say so once, in a window -
+    // also why AIMP just restarted, when the plugin did that
+    const Config c = config::Get();
+    const std::wstring last = c.lastVersion;
+    if (last == kCurrent) return;
+    const bool restarted = c.updateRestarted == kCurrent;
+    config::Update([](Config& u) {
+        u.lastVersion = kCurrent;
+        u.updateRestarted.clear();
+    });
+    if (last.empty() || util::CompareVersions(kCurrent, last) <= 0) return;   // first installation / downgrade
+    util::Log(L"Updated from %ls to %ls", last.c_str(), kCurrent);
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        g_popupTitle = i18n::T("Upd.PopupTitle");
+        g_popupText = util::Subst(i18n::T("Upd.PopupText"), kCurrent);
+        if (restarted) g_popupText = i18n::T("Upd.PopupRestarted") + L"\n\n" + g_popupText;
+    }
+    NotifyUi();
+}
+
+bool TakePopup(std::wstring& title, std::wstring& text) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (g_popupText.empty()) return false;
+    title.swap(g_popupTitle);
+    text.swap(g_popupText);
+    g_popupTitle.clear();
+    g_popupText.clear();
+    return true;
+}
+
+void PopupFailed() {   // no message window (AIMP 3): the short notice in AIMP's display instead
+    std::lock_guard<std::mutex> lk(g_mu);
+    g_notify = util::Subst(i18n::T("Upd.Installed"), kCurrent);
+}
+
+void RestartingFor() {
+    std::wstring version;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        version = g_state.version;
+    }
+    config::Update([&](Config& c) { c.updateRestarted = version; });
 }
 
 bool TakeNotification(std::wstring& text) {

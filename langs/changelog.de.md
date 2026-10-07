@@ -1,5 +1,33 @@
 # Änderungen
 
+## 1.5.4
+
+### Neu
+- **Wechselnde Texte**: Ein Textfeld kann mehrere Texte enthalten, getrennt durch `||`, z. B. *Erste Zeile*
+  `%artist% || %title%`. Discord zeigt sie dann nacheinander an - den Künstler, nach ein paar Sekunden den Titel,
+  dann wieder den Künstler und so weiter. Tab *Anzeige*: „Zwischen Texten mit || wechseln alle (s)“ (Standard 5 s,
+  mindestens 5 s, weil Discord höchstens 5 Updates in 20 Sekunden annimmt). Gilt für beide Zeilen und beide
+  Tooltips; jeder neue Titel beginnt mit dem ersten Text, und die Live-Vorschau wechselt mit
+- **Fenster „Update installiert“**: Nach der Installation einer neuen Version - über den Update-Check oder von Hand -
+  meldet ein Fenster das einmalig (in der Sprache des Plugins) und sagt, wo die Neuerungen stehen (Tab *Über*). Hat
+  das Plugin AIMP für das Update neu gestartet, steht das ebenfalls darin - so weiß jeder, warum AIMP gerade neu
+  gestartet ist. AIMP 3 zeigt stattdessen den kurzen Hinweis in seiner Anzeige
+- **Eigener Name statt „AIMP“**: Tab *Allgemein*, „Name statt „AIMP““. Discord zeigt diesen Text statt des
+  Anwendungsnamens - bei „Hört ...“ im Profil und, mit „Discord-Statustext zeigt: Aktivitätsname“, in der
+  Mitgliederliste. Platzhalter funktionieren (z. B. `%artist%` oder `%title%`), ebenso mehrere Texte mit `||`. Leer =
+  wie bisher der Name der Anwendung. Eine eigene Discord-Anwendung ist dafür nicht nötig
+
+### Geändert
+- Weniger Arbeit während der Wiedergabe: Die Tags des Titels werden nur noch neu gelesen, wenn AIMP einen neuen Titel
+  meldet, nach einem Sprung in der Position und alle 3 Sekunden (Titel von Internetradio-Streams) - vorher bei jeder
+  Prüfung (unter Windows zweimal pro Sekunde)
+- Kleinere Plugin-Dateien: ohne C++-Ausnahmetabellen und Typinformationen gebaut (Windows x64 etwa 7 % kleiner)
+
+### Behoben
+- Windows-AIMP in Wine 10 oder neuer: Das Plugin fand den Linux-Discord-Client nicht, wenn `XDG_RUNTIME_DIR` nicht
+  `/run/user/<id>` ist. Neuere Wine-Versionen geben diese Variable als `WINE_HOST_XDG_RUNTIME_DIR` weiter; das Plugin
+  liest jetzt beide
+
 ## 1.5.3
 
 ### Neu

@@ -57,6 +57,13 @@ grep -q "^/x0.at/ .* -> https://x0.at/" "$TMP/web.log" || { echo "FAILED: x0.at 
 grep -q 'T3st.png?r=1' "$TMP/frames.log" || { echo "FAILED: cover not repaired for Discord"; grep -o 'large_image[^,]*' "$TMP/frames.log" | tail -5; exit 1; }
 rm -f "$TMP/web.log.catbox-broken" "$TMP/web.log.proxy-broken"
 
+# texts with variants ("a || b") switch every RotateSeconds; own name instead of "AIMP"; title changes; tag reads
+printf '[DiscordRPC]\nConfigVersion=7\nCoverEnabled=0\nDetails=%%artist%% || %%title%%\nState=%%title%%\nActivityName=%%album%%\nRotateSeconds=5\nUpdateCheck=0\n' > "$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini"
+before=$(wc -l < "$TMP/frames.log")
+AIMP_TEST_ROTATE=1 "$BUILD/host_test" "$BUILD/aimp_discord_rpc.so" > "$TMP/rotate.out"
+tail -n +$((before + 1)) "$TMP/frames.log" > "$TMP/rotate.frames"
+python3 "$HERE/check_rotation.py" "$TMP/rotate.frames" "$TMP/rotate.out" || exit 1
+
 # AIMP reports a profile folder (portable AIMP): the settings move there once, the old file stays
 printf '[DiscordRPC]\nConfigVersion=6\nDetails=profile test\nUpdateCheck=0\n' > "$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini"
 mkdir -p "$TMP/profile"

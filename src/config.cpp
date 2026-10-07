@@ -15,7 +15,8 @@ std::mutex g_fileMu;    // file access + g_stamp; serializes writers
 uint64_t   g_stamp = 0;
 
 const wchar_t* const kSection = L"DiscordRPC";
-const int kConfigVersion = 6;   // 5 = 1.5.0 (one INI format for both platforms, UTF-16 on Windows), 6 = 1.5.3 (x0.at)
+const int kConfigVersion = 7;   // 5 = 1.5.0 (one INI format for both platforms, UTF-16 on Windows), 6 = 1.5.3 (x0.at),
+                                // 7 = 1.5.4 (RotateSeconds)
 
 #ifdef _WIN32
 const wchar_t* const kEol = L"\r\n";
@@ -68,13 +69,15 @@ void VisitSettings(C& c, V& v) {
     v.Bool(L"Enabled", c.enabled);
     v.Int(L"ActivityType", c.activityType);
     v.Int(L"StatusDisplay", c.statusDisplay);
+    v.Str(L"ActivityName", c.activityName);   // instead of "AIMP" (placeholders and "a || b" work), "" = app name
     v.Bool(L"ShowTimestamps", c.showTimestamps);
     v.Int(L"PausedBehavior", c.pausedBehavior);
     v.Int(L"ClearAfterPausedMin", c.clearAfterPaused);
     v.Bool(L"HideStreams", c.hideStreams);
     v.Str(L"ExcludePaths", c.excludePaths);
     v.Section(L"Display (placeholders: %artist% %title% %album% %albumartist% %genre% %year% %track% %playlist% "
-              L"%filename% %ext% %pos% %dur% %percent% %bar% %status%)");
+              L"%filename% %ext% %pos% %dur% %percent% %bar% %status%; several texts \"a || b\" switch every "
+              L"RotateSeconds)");
     v.Str(L"Details", c.details);
     v.Str(L"State", c.state);
     v.Str(L"LargeText", c.largeText);
@@ -82,6 +85,7 @@ void VisitSettings(C& c, V& v) {
     v.Bool(L"ShowSmallIcon", c.showSmallIcon);
     v.Int(L"BarLength", c.barLength);
     v.Int(L"RefreshSeconds", c.refreshSeconds);
+    v.Int(L"RotateSeconds", c.rotateSeconds);
     v.Bool(L"TitleLink", c.titleLink);
     v.Bool(L"TitleLinkCustom", c.titleLinkCustom);
     v.Str(L"TitleLinkUrl", c.titleLinkUrl);
@@ -119,6 +123,7 @@ void VisitState(C& c, V& v) {   // bookkeeping of the update check, not exported
     v.Str(L"UpdateLatest", c.updateLatest);
     v.Str(L"UpdateOffered", c.updateOffered);
     v.Str(L"LastVersion", c.lastVersion);
+    v.Str(L"UpdateRestarted", c.updateRestarted);
 }
 
 int Clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -158,6 +163,7 @@ Config FromText(const std::wstring& text, bool* found = nullptr, long long* vers
     if (c.titleLinkUrl.empty()) c.titleLinkUrl = kDefaultTitleLink;
     c.barLength = Clamp(c.barLength, 4, 30);
     if (c.refreshSeconds < 5) c.refreshSeconds = 5;
+    c.rotateSeconds = Clamp(c.rotateSeconds, 5, 3600);   // Discord takes at most 5 updates in 20 s
     if (c.clearAfterPaused < 0) c.clearAfterPaused = 0;
     if (c.activityType != 0 && c.activityType != 2) c.activityType = 2;
     if (c.statusDisplay < 0 || c.statusDisplay > 2) c.statusDisplay = 1;
@@ -333,6 +339,7 @@ bool ImportFrom(const std::wstring& path) {
         imported.updateLatest = c.updateLatest;
         imported.updateOffered = c.updateOffered;
         imported.lastVersion = c.lastVersion;
+        imported.updateRestarted = c.updateRestarted;
         c = imported;
     });
     return true;

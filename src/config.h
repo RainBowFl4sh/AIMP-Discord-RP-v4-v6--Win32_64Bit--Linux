@@ -14,6 +14,7 @@ struct Config {
     bool         enabled          = true;
     int          activityType     = 2;           // 2 = Listening (progress bar), 0 = Playing
     int          statusDisplay    = 1;           // 0 = app name, 1 = state line (artist), 2 = details line (title)
+    std::wstring activityName;                   // shown instead of the application name ("Listening to ..."), "" = app name
     bool         showTimestamps   = true;        // progress bar / elapsed time
     int          pausedBehavior   = 1;           // 0 = show "Paused", 1 = clear presence (lets PreMiD etc. show)
     int          clearAfterPaused = 0;           // minutes, 0 = never
@@ -28,6 +29,7 @@ struct Config {
     bool         showSmallIcon  = true;
     int          barLength      = 12;            // characters for %bar%
     int          refreshSeconds = 15;            // refresh interval if %pos% / %bar% / %percent% are used
+    int          rotateSeconds  = 5;             // texts with several variants ("a || b"): switch every N seconds
     // clickable song title (Discord opens the link when someone clicks the title)
     bool         titleLink       = true;
     bool         titleLinkCustom = false;        // override the default YouTube search
@@ -64,6 +66,7 @@ struct Config {
     std::wstring updateLatest;                   // newest version found by the last check
     std::wstring updateOffered;                  // version already installed automatically once
     std::wstring lastVersion;                    // plugin version of the last start (update finished -> notice)
+    std::wstring updateRestarted;                // version AIMP was restarted for by the plugin (popup says why)
 
     // --- computed, not stored
     std::wstring clientId = kDefaultClientId;    // effective application ID

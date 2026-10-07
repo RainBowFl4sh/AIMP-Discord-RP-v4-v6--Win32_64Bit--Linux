@@ -1,4 +1,4 @@
-# AIMP Discord Rich Presence 1.5.3 for AIMP 4, 5 and 6 (Windows x86 / x64 + Linux)
+# AIMP Discord Rich Presence 1.5.4 for AIMP 4, 5 and 6 (Windows x86 / x64 + Linux)
 
 Discord Rich Presence plugin for AIMP 4, 5 and 6 (AIMP 3 with limitations) with its own settings tab inside AIMP's preferences -
 on Windows **and** Linux, in English, German, Russian and Ukrainian, with a live preview, update check and
@@ -51,6 +51,8 @@ In the member list:
   checked (SHA-256) and opened in AIMP, which installs them
 - **Diagnostics**: connection details, test presence, reconnect, recent log, export / import of the settings
 - Text templates with placeholders: `%artist% %title% %album% %albumartist% %genre% %year% %track% %playlist% %filename% %ext% %pos% %dur% %percent% %bar% %status%`
+- **Rotating texts**: several texts in one field, separated by `||` (e.g. `%artist% || %title%`), are shown one after
+  the other - every 5 s or slower, adjustable on the *Display* tab
 - Play/pause small icon, paused behaviour (show "Paused" / hide / hide after N minutes)
 - Internet radio: shows the current song of the stream; can also be hidden completely
 - Hide for paths or playlists containing given text (e.g. podcasts, audiobooks)
@@ -101,7 +103,8 @@ Make sure the plugin is ticked in *Preferences -> Plugins*. As soon as music is 
 
 **Updating:** since 1.5 the plugin looks for new versions itself (*About* tab) and opens them in AIMP; once AIMP has
 installed the new version, the plugin restarts AIMP so it is active right away. You can also install a new version
-the same way as above - your settings are kept.
+the same way as above - your settings are kept. After every update a short window says which version was installed
+(and that AIMP was restarted for it); what is new is on the plugin's *About* tab.
 
 ### AIMP 3 (limited support)
 
@@ -129,7 +132,9 @@ behaviour, hiding streams or paths, live connection status
 **Display** - text templates for both lines and the tooltips, play / pause icon, text progress bar, clickable song
 title (YouTube search by default, or your own link) and the **live preview**: the activity card and the member list
 entry exactly as Discord will show them, updated while you type (before "Apply"). When nothing is playing an
-example track is shown; when the presence is hidden (paused, filtered, ...) the preview says why
+example track is shown; when the presence is hidden (paused, filtered, ...) the preview says why. Several texts in one
+field separated by `||` (e.g. First line `%artist% || %title%`) take turns - "Switch between texts separated by ||
+every (s)" sets how fast (5 s at least, Discord accepts at most 5 updates in 20 seconds)
 
 **Cover art** - local covers (tags / folder image), upload host (x0.at, catbox.moe or Imgur - *Get ID* opens the Imgur
 page for the Client-ID), cover cache, and the
@@ -180,7 +185,8 @@ On the *About* tab: *Check for updates* (at every AIMP start, once a day, once a
 *Install updates automatically*. The plugin asks GitHub for the newest release of this project
 (`api.github.com`, nothing else is sent). If it is newer, the `.aimppack` of the release is downloaded, checked
 against the SHA-256 checksum GitHub publishes for it and opened in AIMP, which installs it. As soon as the new plugin file is in place, the plugin restarts AIMP so the
-new version is loaded (AIMP itself would only offer "Restart now"). A new version is opened automatically only once; afterwards the *Install* button on the *About* tab does it.
+new version is loaded (AIMP itself would only offer "Restart now"); a window then tells you which version was installed and that
+the *About* tab lists what is new. A new version is opened automatically only once; afterwards the *Install* button on the *About* tab does it.
 If automatic installation is off, AIMP shows a short notice instead. Downloaded packages are kept in
 the `DiscordRPC` folder in AIMP's profile folder (see [Files](#files)) and removed after the update.
 
@@ -218,6 +224,9 @@ created with every option on the first start. You can also edit this file by han
 [DiscordRPC]
 Details=%title%
 State=by %artist%
+; texts separated by || take turns every RotateSeconds (at least 5)
+LargeText=%album% || %year%
+RotateSeconds=5
 ; 0 = show "Paused", 1 = hide while paused
 PausedBehavior=1
 CoverEnabled=1
@@ -288,14 +297,21 @@ The full list of changes is in [CHANGELOG.md](CHANGELOG.md) (also in [Deutsch](l
 [Русский](langs/changelog.ru.md) and [Українська](langs/changelog.uk.md) - Russian and Ukrainian translated with AI)
 and on the plugin's *About* tab.
 
+**1.5.4** - **Rotating texts**: several texts in one field separated by `||` (e.g. `%artist% || %title%`) take turns
+in Discord, every 5 s or slower (*Display* tab). After an update - automatic or by hand - a window says which version
+was installed (and, if the plugin restarted AIMP for it, that this was the reason) and that the *About* tab shows
+what is new. **Own name instead of "AIMP"** in "Listening to ..." (*General* tab, placeholders and `||` work, no own Discord
+application needed). Less CPU work while music plays (tags are only read again when something changed) and smaller
+plugin files.
+
+<details>
+<summary>Older versions</summary>
+
 **1.5.3** - Now also for **AIMP 4** (fully supported) and, slightly limited, **AIMP 3**. Local covers are uploaded to **x0.at** (no account) - catbox.moe currently rejects uploads without an
 account and delivers uploaded files empty. Every upload is checked before Discord gets the link; if a host fails,
 another one stands in. Uploaded covers that the host deleted are uploaded again. Covers Discord cannot load
 ("?") are repaired. Updates restart AIMP automatically once installed. Fixed: empty live preview / author picture
 in 32-bit AIMP, "Invalid pointer operation" when closing the preferences in AIMP 4.70.
-
-<details>
-<summary>Older versions</summary>
 
 **1.5.2** - *Export* / *Import* on the *Advanced* tab open the Windows file dialog (they did nothing on Windows).
 catbox.moe uploads are no longer redirected and failures are logged with details.

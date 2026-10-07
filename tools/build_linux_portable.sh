@@ -26,7 +26,7 @@ for dir in /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do   # the 64-bit one 
     if [ -e "$dir/libcairo.so.2" ]; then ln -s "$dir/libcairo.so.2" "$TMP/lib/libcairo.so"; break; fi
 done
 
-python3 -m ziglang c++ -target x86_64-linux-gnu.2.17 -std=c++17 -Os -fPIC -shared -fvisibility=hidden \
+python3 -m ziglang c++ -target x86_64-linux-gnu.2.17 -std=c++17 -Os -fno-exceptions -fno-rtti -fPIC -shared -fvisibility=hidden \
     -Wno-attributes -Wno-nullability-completeness -ffunction-sections -fdata-sections \
     -Wl,--gc-sections -Wl,--version-script="$ROOT/src/exports.map" -s \
     -I"$ROOT/sdk" -I"$ROOT/sdk/Helpers" -I"$ROOT/src" -I"$BUILD/generated" -I"$CAIRO_DIR" -I"$TMP/inc" \
