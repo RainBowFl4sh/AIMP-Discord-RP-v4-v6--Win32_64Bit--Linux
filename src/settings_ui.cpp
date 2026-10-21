@@ -747,13 +747,13 @@ void SettingsPage::BuildTemplates(IAIMPUIWinControl* page) {
     Label(p, "Tpl.AutoHint", 10, y, 430, 30, IDC_AUTOHINT);                                 y += 32;
     Label(p, nullptr, 10, y, 430, 18, IDC_RULESTATUS);                                      y += 22;   // rule in use
     for (int i = 0; i < Config::kRules; ++i) {
-        Label(p, nullptr, 10, y + 3, 18, 18, 0);
+        Label(p, nullptr, 10, y + 3, 22, 18, 0);
         if (!anonymous_.empty()) aimp::SetPropString(core_, anonymous_.back(), AIMPUI_LABEL_PROPID_TEXT, std::to_wstring(i + 1) + L".");
         Combo(p, IDC_RULEFIELD + i, {"Tpl.RulePlaylist", "Tpl.RuleGenre", "Tpl.RuleArtist", "Tpl.RuleAlbum",
                                      "Tpl.RuleTitle", "Tpl.RulePath", "Tpl.RuleComment", "Tpl.RuleCodec",
-                                     "Tpl.RuleStream"}, 30, y, 104);
-        Combo(p, IDC_RULEOP + i, {"Tpl.RuleContains", "Tpl.RuleEquals"}, 138, y, 84);
-        Edit(p, IDC_RULETEXT + i, 226, y, 112);
+                                     "Tpl.RuleStream"}, 34, y, 112);
+        Combo(p, IDC_RULEOP + i, {"Tpl.RuleContains", "Tpl.RuleEquals"}, 150, y, 92);
+        Edit(p, IDC_RULETEXT + i, 246, y, 92);
         if (IAIMPUIControl* c = Create(p, IDC_RULEPRESET + i, IID_IAIMPUIComboBox, true)) {   // items: FillRulePresets
             kinds_[IDC_RULEPRESET + i] = kCombo;
             c->SetValueAsInt32(AIMPUI_COMBOBOX_PROPID_STYLE, AIMPUI_COMBOBOX_STYLE_LIST);
