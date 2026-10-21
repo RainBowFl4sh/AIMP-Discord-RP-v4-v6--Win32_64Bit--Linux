@@ -24,7 +24,7 @@ def texts(path):
 
 en = texts(f"{root}/langs/english.lng")
 source = "".join(open(p, encoding="utf-8").read() for p in glob.glob(f"{root}/src/*.cpp"))
-used = set(re.findall(r'"((?:Tab|Gen|Disp|Cov|Src|Adv|About|Upd|St|Prev|Status|Test)\.[A-Za-z0-9]+)"', source))
+used = set(re.findall(r'"((?:Tab|Gen|Disp|Tpl|Act|Cov|Src|Adv|About|Upd|St|Prev|Status|Test)\.[A-Za-z0-9]+)"', source))
 errors = [f"english.lng: missing {k}" for k in sorted(used - set(en))]
 errors += [f"english.lng: not used {k}" for k in sorted(set(en) - used)]
 for path in sorted(glob.glob(f"{root}/langs/*.lng")):
