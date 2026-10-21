@@ -29,7 +29,7 @@ Gen.PausedHide=Ausblenden (PreMiD u. a. sichtbar)
 Gen.ClearAfter=Presence nach einer Pause entfernen nach (Min., 0 = nie):
 Gen.HideStreams=Bei Internetradio / Streams ausblenden
 Gen.ExcludePaths=Ausblenden, wenn der Dateipfad Folgendes enthält (mit ; trennen):
-Gen.Buttons=Zwei Buttons unter dem Status anzeigen (sehen nur andere, nicht du)
+Gen.Buttons=Zwei Buttons unter dem Status (sehen nur andere, nicht du)
 Gen.Button1=Button 1:
 Gen.Button2=Button 2:
 Gen.Status=Status: %1
