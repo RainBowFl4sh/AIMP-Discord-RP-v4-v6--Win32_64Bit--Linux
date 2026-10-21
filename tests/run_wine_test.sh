@@ -6,7 +6,7 @@
 #        (the build dir contains aimp_discord_rpc.dll and host_test.exe, e.g. a MinGW build)
 set -euo pipefail
 # the Windows file dialog (export / import) needs a screen: use a virtual one when there is none
-if [ -z "${DISPLAY:-}" ] && command -v xvfb-run >/dev/null; then exec xvfb-run -a "$0" "$@"; fi
+if [ -z "${DISPLAY:-}" ] && command -v xvfb-run >/dev/null; then exec xvfb-run -a bash "$0" "$@"; fi
 
 BUILD="$(cd "${1:-build}" && pwd)"
 HERE="$(cd "$(dirname "$0")" && pwd)"
