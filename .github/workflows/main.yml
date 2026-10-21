@@ -41,15 +41,15 @@ jobs:
       - name: Build
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target aimp_discord_rpc host_test -j
+          cmake --build build --target aimp_discord_rpc host_test template_test -j
       - name: Test (mock AIMP host + fake Discord + fake web)
-        run: tests/run_linux_test.sh build previews-linux
+        run: bash tests/run_linux_test.sh build previews-linux
       - name: Portable build (glibc 2.17, the one that is released) + test
         run: |
           pip install ziglang
-          tools/build_linux_portable.sh build portable/aimp_discord_rpc.so
-          cp build/host_test portable/
-          tests/run_linux_test.sh portable
+          bash tools/build_linux_portable.sh build portable/aimp_discord_rpc.so
+          cp build/host_test build/template_test portable/
+          bash tests/run_linux_test.sh portable
       - uses: actions/upload-artifact@v4
         with:
           name: aimp_discord_rpc-linux-x86_64
@@ -73,12 +73,12 @@ jobs:
         run: |
           for arch in x64 x86; do
             cmake -S . -B build-$arch -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-$arch.cmake -DCMAKE_BUILD_TYPE=Release
-            cmake --build build-$arch --target aimp_discord_rpc host_test -j
+            cmake --build build-$arch --target aimp_discord_rpc host_test template_test -j
           done
       - name: Test x64 under Wine
-        run: tests/run_wine_test.sh build-x64 previews-wine-x64
+        run: bash tests/run_wine_test.sh build-x64 previews-wine-x64
       - name: Test x86 under Wine
-        run: tests/run_wine_test.sh build-x86 previews-wine-x86
+        run: bash tests/run_wine_test.sh build-x86 previews-wine-x86
       - uses: actions/upload-artifact@v4
         with:
           name: test-previews-wine
