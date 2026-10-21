@@ -64,6 +64,20 @@ AIMP_TEST_ROTATE=1 "$BUILD/host_test" "$BUILD/aimp_discord_rpc.so" > "$TMP/rotat
 tail -n +$((before + 1)) "$TMP/frames.log" > "$TMP/rotate.frames"
 python3 "$HERE/check_rotation.py" "$TMP/rotate.frames" "$TMP/rotate.out" || exit 1
 
+# advanced placeholders (GitHub issue #4): templates unit test, then more fields and nested %IF... end to end -
+# once with AIMP's formatter (play count from AIMP's statistics), once without it (music library value)
+"$BUILD/template_test"
+for formatter in 1 0; do
+    printf '[DiscordRPC]\nConfigVersion=9\nCoverEnabled=0\nAdvancedPlaceholders=1\nDetails=%s\nState=%%composer%% - %%bitrate%% kbps\nUpdateCheck=0\n' \
+        '%If(%Comment,%Comment,%IFEqual(%PlayCount,1,This song has been played once before,%IFGreater(%PlayCount,1,This song has been played %PlayCount times,%FileSize)))' > "$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini"
+    before=$(wc -l < "$TMP/frames.log")
+    AIMP_TEST_ADVANCED=1 AIMP_TEST_FORMATTER=$formatter "$BUILD/host_test" "$BUILD/aimp_discord_rpc.so" > "$TMP/advanced.out" \
+        || { cat "$TMP/advanced.out"; exit 1; }
+    grep "^advanced:" "$TMP/advanced.out"
+    tail -n +$((before + 1)) "$TMP/frames.log" > "$TMP/advanced.frames"
+    python3 "$HERE/check_advanced.py" "$TMP/advanced.frames" || exit 1
+done
+
 # AIMP reports a profile folder (portable AIMP): the settings move there once, the old file stays
 printf '[DiscordRPC]\nConfigVersion=6\nDetails=profile test\nUpdateCheck=0\n' > "$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini"
 mkdir -p "$TMP/profile"

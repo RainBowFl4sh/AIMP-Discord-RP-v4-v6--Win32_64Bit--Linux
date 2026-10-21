@@ -11,7 +11,7 @@
             aimp_discord_rpc.txt    the same description
 
 The same file is also the archive for the AIMP add-on catalog (aimp_discord_rpc.zip, --zip): the catalog wants
-<name>\<name>.dll, <name>\x64\<name>.dll and a <name>.txt description in each folder, in Russian and English.
+<name>\\<name>.dll, <name>\\x64\\<name>.dll and a <name>.txt description in each folder, in Russian and English.
 
 AIMP for Windows picks the DLL matching its architecture (x86 at the root, x64 in the x64 folder) and ignores the
 .so files. The Linux layout is not documented by AIMP, so the .so is placed in both folders.
@@ -42,9 +42,11 @@ def description(version):
         f"AuthorContact: {REPO}/issues",
         f"Topic: {TOPIC}",
         "Description: Shows the track playing in AIMP as your Discord status (Rich Presence): title, artist, album,"
-        " cover art and Discord's live progress bar, with its own settings page, live preview and update check."
+        " cover art and Discord's live progress bar, with its own settings page, live preview and update check;"
+        " optional buttons, templates with AIMP's %IF conditions and presets with hot keys or automatic rules."
         " / Показывает трек, играющий в AIMP, как статус в Discord (Rich Presence): название, исполнитель, альбом,"
-        " обложка и полоса прогресса Discord; своя страница настроек, предпросмотр и проверка обновлений.",
+        " обложка и полоса прогресса Discord; своя страница настроек, предпросмотр и проверка обновлений;"
+        " по желанию кнопки, шаблоны с условиями %IF AIMP и пресеты с горячими клавишами или автоматическими правилами.",
         "",
         "English",
         "-------",

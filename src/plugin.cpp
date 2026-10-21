@@ -14,6 +14,7 @@
 #endif
 
 #include "aimp_util.h"
+#include "apiActions.h"
 #include "apiCore.h"
 #include "apiFileManager.h"
 #include "apiGUI.h"
@@ -30,6 +31,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <cwctype>
 #include <mutex>
 
 #include "config.h"
@@ -91,6 +93,7 @@ public:
 
     void SetService(IAIMPServiceOptionsDialog* svc) { service_ = svc; }
     void Refresh() { if (page_) page_->Refresh(); }
+    void Reload() { if (page_) page_->Load(); }   // the settings changed elsewhere (preset hot key)
 
 private:
     Plugin* owner_;
@@ -127,6 +130,35 @@ public:
 
 private:
     Plugin* owner_;
+    std::atomic<long> ref_{1};
+};
+
+// ---- hot key actions: "load preset N" (0..9), "next preset" (-1) and "Discord display on / off" (-2);
+// AIMP lists them under Preferences > Hot keys
+class PresetAction final : public IAIMPActionEvent {
+public:
+    explicit PresetAction(int index) : index_(index) {}
+
+    HRESULT __unknwncall QueryInterface(REFIID riid, LPVOID* ppv) override {
+        if (!ppv) return E_POINTER;
+        if (SameIID(riid, IID_IUnknown) || SameIID(riid, IID_IAIMPActionEvent)) {
+            *ppv = static_cast<IAIMPActionEvent*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *ppv = nullptr;
+        return E_NOINTERFACE;
+    }
+    DWORD __unknwncall AddRef() override { return (DWORD)++ref_; }
+    DWORD __unknwncall Release() override {
+        DWORD r = (DWORD)--ref_;
+        if (r == 0) delete this;
+        return r;
+    }
+    void WINAPI OnExecute(IUnknown*) override;
+
+private:
+    int index_;
     std::atomic<long> ref_{1};
 };
 
@@ -196,6 +228,9 @@ public:
     void OnUiNotify();
     void RestartAimp();
     void ShowPopup(const std::wstring& title, const std::wstring& text);
+    void LoadPresetByKey(int index);   // hot key: preset 0..9, -1 = the next stored one
+    void ToggleByKey();                // hot key: Discord display on / off
+    void NameActions();                // action names in AIMP's hot key list (language, preset names)
 
     void Poll();
 
@@ -203,9 +238,13 @@ private:
 #ifdef _WIN32
     static LRESULT CALLBACK TimerWndProc(HWND, UINT, WPARAM, LPARAM);
 #endif
+    void RegisterActions();
     double ReadReal(int message);
     int ReadState();
     bool ReadTrack(TrackInfo& t, double& duration);
+    std::wstring ReadNext();   // the track AIMP plays next, "" = none / unknown
+    void ReadExtra(IAIMPFileInfo* info, IAIMPPlaylistItem* item, TrackInfo& t);
+    std::wstring FormatMacro(IAIMPFileInfo* info, const wchar_t* macro);
 
     IAIMPCore* core_ = nullptr;
     ComPtr<IAIMPServicePlayer> player_;
@@ -213,6 +252,7 @@ private:
     ComPtr<IAIMPServiceOptionsDialog> options_;
     OptionsFrame* frame_ = nullptr;
     EventHook* hook_ = nullptr;
+    std::vector<IAIMPAction*> actions_;   // registered hot key actions (one reference each)
 #ifdef _WIN32
     HWND timerWnd_ = nullptr;
 #endif
@@ -317,6 +357,12 @@ void WINAPI EventHook::CoreMessage(DWORD message, INT32, void*, HRESULT*) {
     }
 }
 
+void WINAPI PresetAction::OnExecute(IUnknown*) {
+    if (!g_plugin) return;
+    if (index_ == -2) g_plugin->ToggleByKey();
+    else g_plugin->LoadPresetByKey(index_);
+}
+
 #ifndef _WIN32
 void WINAPI UiTask::Execute(IAIMPTaskOwner*) {
     g_uiPending = false;
@@ -333,6 +379,10 @@ void NotifyUi() {
     if (!g_threads || FAILED(g_threads->ExecuteInMainThread(&g_uiTask, 0))) g_uiPending = false;
 #endif
     // Windows: the 500 ms timer refreshes the settings page anyway
+}
+
+void PresetsChanged() {
+    if (g_plugin) g_plugin->NameActions();
 }
 
 namespace {
@@ -381,6 +431,8 @@ HRESULT WINAPI Plugin::Initialize(IAIMPCore* core) {
         frame_->SetService(options_.get());
     core_->RegisterExtension(IID_IAIMPServiceOptionsDialog, frame_);
 
+    RegisterActions();
+
     // AIMP messages arrive on AIMP's main thread, so all SDK calls stay there
     hook_ = new EventHook(this);
     if (FAILED(dispatcher_->Hook(hook_))) util::Log(L"Could not hook AIMP events");
@@ -418,6 +470,11 @@ HRESULT WINAPI Plugin::Finalize() {
         hook_->Release();
         hook_ = nullptr;
     }
+    for (IAIMPAction* a : actions_) {
+        if (core_) core_->UnregisterExtension(a);
+        a->Release();
+    }
+    actions_.clear();
     if (core_ && frame_) {
         core_->UnregisterExtension(frame_);
         frame_->DestroyFrame();
@@ -448,6 +505,81 @@ HRESULT WINAPI Plugin::Finalize() {
     return S_OK;
 }
 
+// One action per preset plus "next preset" (AIMP 3.60 has them too). Without the actions API the presets are only in the list.
+void Plugin::RegisterActions() {
+    for (int i = -2; i < Config::kPresets; ++i) {
+        ComPtr<IAIMPAction> action;
+        if (FAILED(core_->CreateObject(IID_IAIMPAction, action.putVoid())) || !action) {
+            util::Log(L"No hot key actions in this AIMP version");
+            return;
+        }
+        const std::wstring id = i == -2 ? std::wstring(L"aimp_discord_rpc.toggle")
+                              : i < 0   ? std::wstring(L"aimp_discord_rpc.preset.next")
+                                      : L"aimp_discord_rpc.preset." + std::to_wstring(i + 1);
+        aimp::SetPropString(core_, action.get(), AIMP_ACTION_PROPID_ID, id);
+        PresetAction* ev = new PresetAction(i);
+        action->SetValueAsObject(AIMP_ACTION_PROPID_EVENT, static_cast<IAIMPActionEvent*>(ev));
+        ev->Release();
+        if (FAILED(core_->RegisterExtension(IID_IAIMPServiceActionManager, action.get()))) {
+            util::Log(L"Could not register the hot key action %ls", id.c_str());
+            continue;
+        }
+        actions_.push_back(action.get());
+        action->AddRef();
+    }
+    NameActions();
+}
+
+void Plugin::NameActions() {
+    if (actions_.empty()) return;
+    const Config c = config::Get();
+    for (size_t k = 0; k < actions_.size(); ++k) {
+        const int i = (int)k - 2;   // first: "on / off", "next preset"
+        std::wstring name;
+        if (i == -2) name = i18n::T("Act.Toggle");
+        else if (i < 0) name = i18n::T("Act.Next");
+        else if (c.presets[i].name.empty()) name = util::Subst(i18n::T("Act.Preset"), std::to_wstring(i + 1));
+        else name = util::Subst(i18n::T("Act.PresetNamed"), std::to_wstring(i + 1), c.presets[i].name);
+        aimp::SetPropString(core_, actions_[k], AIMP_ACTION_PROPID_NAME, name);
+        aimp::SetPropString(core_, actions_[k], AIMP_ACTION_PROPID_GROUPNAME, L"Discord Rich Presence");
+    }
+}
+
+void Plugin::LoadPresetByKey(int index) {
+    Config c = config::Get();
+    if (index < 0) {   // the next stored preset after the active one
+        for (int k = 1; k <= Config::kPresets; ++k) {
+            const int i = (c.activePreset - 1 + k + Config::kPresets) % Config::kPresets;
+            if (!c.presets[i].name.empty()) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) return;
+    }
+    if (!LoadPreset(c, index)) {
+        util::Log(L"Hot key: preset %d is empty", index + 1);
+        return;
+    }
+    util::Log(L"Hot key: preset %d (%ls)", index + 1, c.presets[index].name.c_str());
+    c.manualTrack = lastId_;   // wins over the automatic presets until the track changes
+    config::Set(c);
+    Worker().Refresh();
+    forcePush_ = true;
+    if (frame_) frame_->Reload();   // an open settings page shows the loaded texts
+}
+
+// Hot key "Discord display on / off": the same as the "Enable" tick on the General tab
+void Plugin::ToggleByKey() {
+    Config c = config::Get();
+    c.enabled = !c.enabled;
+    util::Log(L"Hot key: Discord display %ls", c.enabled ? L"on" : L"off");
+    config::Set(c);
+    Worker().Refresh();
+    forcePush_ = true;
+    if (frame_) frame_->Reload();
+}
+
 // AIMP's language: what the MUI service tells about the loaded language file (matched in i18n.cpp)
 void Plugin::DetectLanguage() {
     std::vector<std::wstring> hints;
@@ -466,6 +598,7 @@ void Plugin::DetectLanguage() {
     for (const std::wstring& h : hints)
         if (!util::Trim(h).empty()) clean.push_back(util::Trim(h));
     i18n::SetAimpHints(clean);
+    NameActions();
 }
 
 // main thread: something changed in the background (connection, cover, downloads, update check)
@@ -594,9 +727,105 @@ bool Plugin::ReadTrack(TrackInfo& t, double& duration) {
         if (t.fileName.empty()) t.fileName = PropString(info.get(), AIMP_FILEINFO_PROPID_FILENAME);
         double d = 0;
         if (SUCCEEDED(info->GetValueAsFloat(AIMP_FILEINFO_PROPID_DURATION, &d)) && d > 0) duration = d;
+        if (config::Get().advancedTemplates) ReadExtra(info.get(), item.get(), t);
     }
     if (t.title.empty()) t.title = util::FileNameNoExt(t.fileName);   // untagged files / streams
+    if (UsesPlaceholder(config::Get(), L"next")) t.next = ReadNext();
     return true;
+}
+
+// AIMP's playback queue knows the next track (queue, shuffle and playlist order included), also in
+// AIMP 3.60. Without the service %next% stays empty.
+std::wstring Plugin::ReadNext() {
+    ComPtr<IAIMPServicePlaybackQueue> queue;
+    ComPtr<IAIMPPlaybackQueueItem> next;
+    ComPtr<IAIMPPlaylistItem> item;
+    if (FAILED(core_->QueryInterface(IID_IAIMPServicePlaybackQueue, queue.putVoid())) || !queue ||
+        FAILED(queue->GetNextTrack(next.put())) || !next ||
+        FAILED(next->GetValueAsObject(AIMP_PLAYBACKQUEUEITEM_PROPID_PLAYLISTITEM, IID_IAIMPPlaylistItem, item.putVoid())) ||
+        !item)
+        return std::wstring();
+    std::wstring artist, title;
+    ComPtr<IAIMPFileInfo> info;
+    if (SUCCEEDED(item->GetValueAsObject(AIMP_PLAYLISTITEM_PROPID_FILEINFO, IID_IAIMPFileInfo, info.putVoid())) && info) {
+        artist = util::Trim(PropString(info.get(), AIMP_FILEINFO_PROPID_ARTIST));
+        title = util::Trim(PropString(info.get(), AIMP_FILEINFO_PROPID_TITLE));
+    }
+    if (title.empty()) title = util::FileNameNoExt(PropString(item.get(), AIMP_PLAYLISTITEM_PROPID_FILENAME));
+    return artist.empty() ? title : artist + L" - " + title;
+}
+
+// AIMP's own formatter for one macro ("%PlayCount"): AIMP knows values that are no tag (statistics)
+std::wstring Plugin::FormatMacro(IAIMPFileInfo* info, const wchar_t* macro) {
+    ComPtr<IAIMPServiceFileInfoFormatter> fmt;
+    if (!info || FAILED(core_->QueryInterface(IID_IAIMPServiceFileInfoFormatter, fmt.putVoid())) || !fmt) return {};
+    ComPtr<IAIMPString> tmpl;
+    *tmpl.put() = aimp::MakeString(core_, macro);
+    if (!tmpl) return {};
+    for (int id : {AIMP_FILEINFO_FORMATTER_ID_PLAYING, AIMP_FILEINFO_FORMATTER_ID_BASIC}) {
+        ComPtr<IAIMPString> out;
+        if (SUCCEEDED(fmt->Format(tmpl.get(), info, id, nullptr, out.put())) && out) {
+            const std::wstring r = util::Trim(aimp::StringOf(out.get()));
+            if (!r.empty() && r.find(L'%') == std::wstring::npos) return r;
+        }
+    }
+    return {};
+}
+
+// More fields for the advanced placeholders (Display tab). Read only when they are switched on.
+void Plugin::ReadExtra(IAIMPFileInfo* info, IAIMPPlaylistItem* item, TrackInfo& t) {
+    static const struct { const wchar_t* name; int id; } kText[] = {
+        {L"comment", AIMP_FILEINFO_PROPID_COMMENT},     {L"composer", AIMP_FILEINFO_PROPID_COMPOSER},
+        {L"lyricist", AIMP_FILEINFO_PROPID_LYRICIST},   {L"conductor", AIMP_FILEINFO_PROPID_CONDUCTOR},
+        {L"copyright", AIMP_FILEINFO_PROPID_COPYRIGHT}, {L"mood", AIMP_FILEINFO_PROPID_MOOD},
+        {L"codec", AIMP_FILEINFO_PROPID_CODEC},         {L"disc", AIMP_FILEINFO_PROPID_DISKNUMBER},
+        {L"disctotal", AIMP_FILEINFO_PROPID_DISKTOTAL}, {L"tracktotal", AIMP_FILEINFO_PROPID_TRACKTOTAL},
+        {L"isrc", AIMP_FILEINFO_PROPID_ISRC},           {L"key", AIMP_FILEINFO_PROPID_KEY},
+    };
+    static const struct { const wchar_t* name; int id; } kInt[] = {
+        {L"bitrate", AIMP_FILEINFO_PROPID_BITRATE},   {L"samplerate", AIMP_FILEINFO_PROPID_SAMPLERATE},
+        {L"channels", AIMP_FILEINFO_PROPID_CHANNELS}, {L"bitdepth", AIMP_FILEINFO_PROPID_BITDEPTH},
+        {L"bpm", AIMP_FILEINFO_PROPID_BPM},           {L"rating", AIMP_FILEINFO_PROPID_RATING},
+    };
+    for (const auto& f : kText) {
+        std::wstring v = PropString(info, f.id);
+        std::wstring line;   // Discord shows one line: line breaks / tabs become one space
+        for (wchar_t c : v) {
+            if (c == L'\r' || c == L'\n' || c == L'\t') c = L' ';
+            if (c != L' ' || line.empty() || line.back() != L' ') line += c;
+        }
+        t.extra[f.name] = util::Trim(line);
+    }
+    if (t.extra[L"codec"].empty()) {   // AIMP often has no codec name (e.g. MP3): the file type instead
+        std::wstring ext = util::FileExt(t.fileName);
+        for (wchar_t& c : ext) c = (wchar_t)towupper(c);
+        if (!util::IsUrl(t.fileName)) t.extra[L"codec"] = ext;
+    }
+    for (const auto& f : kInt) {
+        INT32 v = 0;
+        t.extra[f.name] = SUCCEEDED(info->GetValueAsInt32(f.id, &v)) && v > 0 ? std::to_wstring(v) : std::wstring();
+    }
+    INT64 size = 0;
+    if (SUCCEEDED(info->GetValueAsInt64(AIMP_FILEINFO_PROPID_FILESIZE, &size)) && size > 0) {
+        wchar_t buf[32];
+        swprintf(buf, 32, L"%.2f MB", (double)size / (1024.0 * 1024.0));
+        t.extra[L"filesize"] = buf;
+        t.extra[L"filesizebytes"] = std::to_wstring((long long)size);
+    } else {
+        t.extra[L"filesize"] = t.extra[L"filesizebytes"] = std::wstring();
+    }
+    // play count: AIMP's statistics (what AIMP itself shows as %PlayCount), else the music library's value
+    std::wstring count = FormatMacro(info, L"%PlayCount");
+    for (wchar_t c : count) if (c < L'0' || c > L'9') { count.clear(); break; }
+    if (count.empty()) {
+        INT32 v = 0;
+        ComPtr<IAIMPFileInfo> itemInfo;
+        if (SUCCEEDED(info->GetValueAsInt32(AIMP_FILEINFO_PROPID_ML_PLAYCOUNT, &v)) && v > 0) count = std::to_wstring(v);
+        else if (item && SUCCEEDED(item->GetValueAsObject(AIMP_PLAYLISTITEM_PROPID_FILEINFO, IID_IAIMPFileInfo, itemInfo.putVoid())) &&
+                 itemInfo && SUCCEEDED(itemInfo->GetValueAsInt32(AIMP_FILEINFO_PROPID_ML_PLAYCOUNT, &v)) && v > 0)
+            count = std::to_wstring(v);
+    }
+    t.extra[L"playcount"] = count;
 }
 
 void Plugin::Poll() {
@@ -635,6 +864,7 @@ void Plugin::Poll() {
             lastInfoDur_ = infoDur;
             uint64_t id = util::Fnv1a(t.fileName + L"|" + t.artist + L"|" + t.title + L"|" + t.album + L"|" + t.playlist);
             if (id != lastId_) push = true;                 // new track
+            else if (t.extra != lastTrack_.extra || t.next != lastTrack_.next) push = true;   // e.g. the play count went up
             lastId_ = id;
             lastTrack_ = std::move(t);
         }

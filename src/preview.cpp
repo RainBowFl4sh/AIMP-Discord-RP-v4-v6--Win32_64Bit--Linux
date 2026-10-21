@@ -18,7 +18,8 @@ namespace {
 
 // Discord's dark theme
 const uint32_t kPanel = 0x121214, kCard = 0x1f1f23, kRow = 0x232328, kWhite = 0xf2f3f5, kText = 0xdbdee1,
-               kMuted = 0x949ba4, kTrack = 0x4e5058, kGreen = 0x23a55a, kBlurple = 0x5865f2, kOrange = 0xf5a623;
+               kMuted = 0x949ba4, kTrack = 0x4e5058, kGreen = 0x23a55a, kBlurple = 0x5865f2, kOrange = 0xf5a623,
+               kButton = 0x4e5058;
 
 const float kPi = 3.14159265f;
 const float kDesignW = 470, kDesignH = 140;   // design units; scaled to the paint box (kPreviewWidth x kPreviewHeight)
@@ -220,7 +221,7 @@ private:
 
 // one line, cut with "…" to fit 'w'; right = right aligned
 void Text(Painter& p, std::wstring t, float x, float y, float w, float size, bool bold, uint32_t rgb,
-          bool right = false) {
+          bool right = false, bool center = false) {
     if (t.empty() || w <= 0) return;
     float tw = p.Measure(t, size, bold);
     if (tw > w) {
@@ -233,7 +234,7 @@ void Text(Painter& p, std::wstring t, float x, float y, float w, float size, boo
         t = util::Trim(t.substr(0, lo)) + L"…";
         tw = p.Measure(t, size, bold);
     }
-    p.Draw(t, right ? x + w - tw : x, y, size, bold, rgb);
+    p.Draw(t, right ? x + w - tw : center ? x + (w - tw) / 2 : x, y, size, bold, rgb);
 }
 
 // word-wrapped text, at most maxLines lines
@@ -289,7 +290,8 @@ void DrawPreview(HCANVAS canvas, const RECT& r, const PreviewData& d) {
         Text(p, d.header, cx + 12, cy + 9, cw - 56, 12.5f, true, kText);
         for (int i = 0; i < 3; ++i) p.Circle(cx + cw - 30 + i * 6.5f, cy + 16, 1.6f, kText);   // "..."
 
-        const float ix = cx + 12, iy = cy + 32, is = 64;
+        const bool buttons = !d.buttons[0].empty();
+        const float ix = cx + 12, iy = cy + (buttons ? 28 : 32), is = 64;   // buttons: a little higher
         if (d.cover) {
             p.Image(d.cover, ix, iy, is, is, 8, kCard);
         } else {   // the application's "aimp" image could not be loaded: a simple stand-in
@@ -318,6 +320,15 @@ void DrawPreview(HCANVAS canvas, const RECT& r, const PreviewData& d) {
         } else if (!d.elapsed.empty()) {
             Text(p, d.elapsed, tx, py, tw, 12, false, kText);
         }
+        if (buttons) {   // like Discord: grey buttons over the card's width, side by side
+            const int n = d.buttons[1].empty() ? 1 : 2;
+            const float by = cy + ch - 21, gap = 6, bw = (cw - 24 - gap * (n - 1)) / n;
+            for (int i = 0; i < n; ++i) {
+                const float bx = cx + 12 + i * (bw + gap);
+                p.Round(bx, by, bw, 16, 3, kButton);
+                Text(p, d.buttons[i], bx + 6, by + 1.5f, bw - 12, 11, true, kWhite, false, true);
+            }
+        }
     }
 
     // ---- member list entry
@@ -339,12 +350,18 @@ void DrawPreview(HCANVAS canvas, const RECT& r, const PreviewData& d) {
 
     // ---- notes: tooltips, title link, why nothing / an example is shown
     float y = my + 58;
+    // with the buttons note and a message there is no room for the tooltip/link lines: everything stays in the panel
+    const bool many = !d.buttonsTip.empty() && !d.message.empty();
     for (const std::wstring* line : {&d.iconTip, &d.linkTip}) {
-        if (line->empty()) continue;
+        if (line->empty() || many) continue;
         Text(p, *line, mx + 2, y, mw - 4, 11.5f, false, kMuted);
         y += 17;
     }
-    if (!d.hidden && !d.message.empty()) Wrapped(p, d.message, mx + 2, y, mw - 4, 11.5f, kOrange, 3, 16);
+    if (!d.buttonsTip.empty()) {   // only others see the buttons (wrapped: the panel is narrow)
+        Wrapped(p, d.buttonsTip, mx + 2, y, mw - 4, 11.5f, kOrange, 2, 14);
+        y += 31;
+    }
+    if (!d.hidden && !d.message.empty()) Wrapped(p, d.message, mx + 2, y, mw - 4, 11.5f, kOrange, many ? 2 : 3, many ? 14 : 16);
 }
 
 // A picture with rounded corners (the author on the About tab). The corners are not painted, so the page's own

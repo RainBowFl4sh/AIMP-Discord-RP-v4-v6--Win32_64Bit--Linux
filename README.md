@@ -1,4 +1,4 @@
-# AIMP Discord Rich Presence 1.5.4 for AIMP 4, 5 and 6 (Windows x86 / x64 + Linux)
+# AIMP Discord Rich Presence 1.6.0 for AIMP 4, 5 and 6 (Windows x86 / x64 + Linux)
 
 Discord Rich Presence plugin for AIMP 4, 5 and 6 (AIMP 3 with limitations) with its own settings tab inside AIMP's preferences -
 on Windows **and** Linux, in English, German, Russian and Ukrainian, with a live preview, update check and
@@ -25,6 +25,10 @@ How it looks in Discord - while playing (live progress bar) and paused:
   <img src="docs/screenshots/discord-paused.png" alt="Discord profile while paused" width="320">
 </p>
 
+With a clickable title and two buttons (1.6, *Display* tab):
+
+<img src="docs/screenshots/discord-buttons-v1.6.png" alt="Discord card with the buttons Lyrics on Genius and Find on Spotify" width="400">
+
 In the member list:
 
 <img src="docs/screenshots/discord-member-list.png" alt="Discord member list" width="320">
@@ -39,10 +43,14 @@ In the member list:
   - artist check against every hit to avoid wrong covers; covers are cached on disk
 - AIMP logo as fallback if no cover is found
 - Clickable song title: opens a YouTube search for artist + title (own link optional)
+- Optional: two buttons under the presence (e.g. lyrics / Spotify search for the current track), advanced templates
+  with AIMP's `%IF` conditions, own texts for pause and radio, up to 10 presets that
+  can be loaded with hot keys or switch automatically by rules (playlist, genre, ...), and a hot key to switch the
+  presence on / off
 - PreMiD friendly: while AIMP is paused its presence is hidden, so your browser activity (PreMiD) is shown instead
 - Works out of the box - no Discord application or key needed
 - Own settings tab: *Preferences -> Plugins -> Discord Rich Presence* (General / Display / Cover art / Sources /
-  Advanced / About), built with AIMP's own UI - follows the AIMP skin (light / dark) and is the same on Windows and Linux
+  Advanced / About, plus *Templates* with advanced templates), built with AIMP's own UI - follows the AIMP skin (light / dark) and is the same on Windows and Linux
 - **Live preview** of your Discord profile card and member list entry while you edit the texts
 - **Cover preview**: the current cover and where it comes from (tags, folder, Deezer, iTunes, ...)
 - **Follows AIMP's language**: English, German, Russian and Ukrainian built in (can also be chosen); more languages
@@ -50,7 +58,7 @@ In the member list:
 - **Update check** (daily / weekly / monthly / at every AIMP start, or off): new versions are downloaded from GitHub,
   checked (SHA-256) and opened in AIMP, which installs them
 - **Diagnostics**: connection details, test presence, reconnect, recent log, export / import of the settings
-- Text templates with placeholders: `%artist% %title% %album% %albumartist% %genre% %year% %track% %playlist% %filename% %ext% %pos% %dur% %percent% %bar% %status%`
+- Text templates with placeholders: `%artist% %title% %album% %albumartist% %genre% %year% %track% %playlist% %next% %filename% %ext% %pos% %dur% %percent% %bar% %status%`
 - **Rotating texts**: several texts in one field, separated by `||` (e.g. `%artist% || %title%`), are shown one after
   the other - every 5 s or slower, adjustable on the *Display* tab
 - Play/pause small icon, paused behaviour (show "Paused" / hide / hide after N minutes)
@@ -126,15 +134,65 @@ All options are in AIMP under *Preferences -> Plugins -> Discord Rich Presence* 
 built with AIMP's own UI controls, so it follows the current AIMP skin, and it is shown in AIMP's language. Links
 (GitHub, Developer Portal, Spotify, Discogs) are opened by AIMP in your browser.
 
-**General** - on/off, activity type (Listening with progress bar / Playing), what the Discord status shows, paused
+**General** - on/off (also by the hot key "Discord display on / off" under *Preferences -> Hot keys*), activity type (Listening with progress bar / Playing), what the Discord status shows, paused
 behaviour, hiding streams or paths, live connection status
 
+**Buttons** (*Display* tab, off by default) - two buttons under the presence, each with a label (1 to 32 characters)
+and an `http(s)` link; placeholders work in both (the link gets them URL-encoded). Preset: "Lyrics on Genius"
+(`https://genius.com/search?q=%artist%+%title%`) and "Find on Spotify"
+(`https://open.spotify.com/search/%artist%%20%title%`). Discord shows the buttons **only to others** - not on your
+own profile -, so the live preview draws them for you
+
 **Display** - text templates for both lines and the tooltips, play / pause icon, text progress bar, clickable song
-title (YouTube search by default, or your own link) and the **live preview**: the activity card and the member list
-entry exactly as Discord will show them, updated while you type (before "Apply"). When nothing is playing an
-example track is shown; when the presence is hidden (paused, filtered, ...) the preview says why. Several texts in one
-field separated by `||` (e.g. First line `%artist% || %title%`) take turns - "Switch between texts separated by ||
-every (s)" sets how fast (5 s at least, Discord accepts at most 5 updates in 20 seconds)
+title (YouTube search by default, or your own link), **buttons** (the settings scroll) and the **live preview**: the
+activity card and the member list entry exactly as Discord will show them, updated while you type (before "Apply").
+When nothing is playing an example track is shown; when the presence is hidden (paused, filtered, ...) the preview
+says why. Several texts in one field separated by `||` (e.g. First line `%artist% || %title%`) take turns - "Switch
+between texts separated by || every (s)" sets how fast (5 s at least, Discord accepts at most 5 updates in 20 seconds)
+
+**Advanced templates** (tick on the *Display* tab, off by default) - a *Templates* tab with multi-line fields for
+the four texts, a list of all placeholders and functions, more fields and AIMP's conditions.
+
+- *Texts for*: **Playback**, **Pause** (only shown if the *General* tab shows "Paused") and **Radio / stream**
+  (internet radio and other streams). An empty field for pause or radio takes the text for playback. The preview on the
+  *Templates* tab shows the chosen case.
+- **Presets** - up to 10 sets of all these texts: choose a slot, type a name, *Save*; choosing a stored preset in the
+  list loads it (then *Apply*), *Delete* frees the slot. Every preset can be loaded with a hot key: AIMP lists
+  "Load preset 1" ... "Load preset 10" and "Load the next preset" under *Preferences -> Hot keys* (group
+  "Discord Rich Presence"), local or global like any AIMP action - in AIMP 3 too, where the presets are written into
+  `DiscordRPC.ini` by hand. Presets are stored in `DiscordRPC.ini` and exported with the settings.
+- **Switch presets automatically** - up to 10 rules "if *field* contains / equals *text* -> preset", checked for
+  every track. Fields: playlist, genre, artist, album, title, file path, comment, codec and radio / stream (any
+  stream, no text). Several texts are separated by `;` (`Podcast; Hörbuch`), case does not matter. The first
+  matching rule wins; with no match the texts above are shown. A preset loaded by hot key (or chosen on the page)
+  wins until the next track. Below the rules the tab says which rule applies to the current track. In AIMP 3 the
+  rules are set in `DiscordRPC.ini` (`AutoPresets=1`, `Rule1Field`, `Rule1Equals`, `Rule1Text`, `Rule1Preset`, ...;
+  the section comment lists the numbers).
+
+Line breaks in the template fields are only for a better overview: after a
+`,` or `(` and before a `,` or `)` they are removed together with the indentation, between words they become one space. Fields (empty when AIMP has no value):
+
+| Field | Meaning |
+|---|---|
+| `%comment%` `%composer%` `%lyricist%` `%conductor%` `%copyright%` `%mood%` `%isrc%` `%key%` | tags |
+| `%disc%` `%disctotal%` `%tracktotal%` | disc number, number of discs / tracks |
+| `%bitrate%` (kbps) `%samplerate%` (Hz) `%channels%` `%bitdepth%` `%bpm%` `%rating%` | numbers |
+| `%codec%` | AIMP's codec name, otherwise the file type (`MP3`, `FLAC`, ...) |
+| `%filesize%` / `%filesizebytes%` | `13.52 MB` / `14176256` |
+| `%playcount%` | AIMP's play count - AIMP keeps it for tracks of its music library |
+
+Functions (names without case, nested as deep as needed): `%IF(A,B,C)` - B if A is not empty, otherwise C;
+`%IFEqual(A,B,C,D)` - C if A = B, otherwise D; `%IFGreater(A,B,C,D)` - C if A > B; `%IFGreaterOrEqual(A,B,C,D)` -
+C if A >= B. Numbers are compared by value, texts without case. Fields can also be written the AIMP way without the
+closing `%`, so a template from AIMP works as it is:
+
+```
+%If(%Comment,%Comment,%IFEqual(%PlayCount,1,This song has been played once before,
+  %IFGreater(%PlayCount,1,This song has been played %PlayCount times,%FileSize)))
+```
+
+A comma, bracket or `%` that should appear as text is written `\,` `\(` `\)` `\%`. Discord shows at most 128 bytes
+per line, longer results are cut.
 
 **Cover art** - local covers (tags / folder image), upload host (x0.at, catbox.moe or Imgur - *Get ID* opens the Imgur
 page for the Client-ID), cover cache, and the
@@ -154,7 +212,11 @@ language (automatic = AIMP's language), own Discord application, export / import
 <table>
   <tr>
     <td width="50%"><b>General</b><br><img src="docs/screenshots/settings-general-v1.5.png" alt="General tab"></td>
-    <td width="50%"><b>Display</b> - with the live preview<br><img src="docs/screenshots/settings-display-v1.5.png" alt="Display tab with the live preview"></td>
+    <td width="50%"><b>Display</b> - clickable title, buttons and the live preview<br><img src="docs/screenshots/settings-display-v1.6.png" alt="Display tab with buttons and the live preview"></td>
+  </tr>
+  <tr>
+    <td><b>Templates</b> - presets and own texts for playback, pause and radio<br><img src="docs/screenshots/settings-templates-v1.6.png" alt="Templates tab"></td>
+    <td><b>Hot keys</b> in AIMP - display on / off and the 10 presets<br><img src="docs/screenshots/settings-hotkeys-v1.6.png" alt="AIMP hot keys with the Discord Rich Presence group"></td>
   </tr>
 </table>
 
@@ -291,11 +353,23 @@ The presence looks the same for everyone: Discord loads the public cover URL its
 Normally not needed. Tick *Advanced -> Use my own Discord application* and enter its Application ID.
 The application needs the art assets `aimp`, `play` and `pause` (Developer Portal -> Rich Presence -> Art Assets).
 
+## Thanks
+
+- [@TheConfusedlol](https://github.com/TheConfusedlol) for the idea of more placeholders and AIMP's `%IF` functions
+  ([GitHub issue #4](https://github.com/RainBowFl4sh/AIMP-Discord-RP-v5.x-v6.x-64bit/issues/4)), which grew into the
+  advanced templates of 1.6.0
+
 ## Changelog
 
 The full list of changes is in [CHANGELOG.md](CHANGELOG.md) (also in [Deutsch](langs/changelog.de.md),
 [Русский](langs/changelog.ru.md) and [Українська](langs/changelog.uk.md) - Russian and Ukrainian translated with AI)
 and on the plugin's *About* tab.
+
+**1.6.0** - **Advanced templates** (optional): more fields like `%comment%`, `%composer%`, `%playcount%`,
+`%filesize%` and AIMP's conditions `%IF`, `%IFEqual`, `%IFGreater`, `%IFGreaterOrEqual` in multi-line fields on a new
+*Templates* tab, own texts for pause and radio streams, and up to 10 **presets** - loaded with AIMP hot keys or
+automatically by rules (playlist, genre, artist, ...). Hot key for Discord display on / off, placeholder `%next%`.
+**Buttons**: two buttons under the presence with own labels and links (optional, only others see them).
 
 **1.5.4** - **Rotating texts**: several texts in one field separated by `||` (e.g. `%artist% || %title%`) take turns
 in Discord, every 5 s or slower (*Display* tab). After an update - automatic or by hand - a window says which version

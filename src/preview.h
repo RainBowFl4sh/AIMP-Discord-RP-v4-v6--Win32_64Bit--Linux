@@ -13,6 +13,8 @@ struct PreviewData {
     std::wstring memberLine;              // activity text in the member list
     std::wstring userName;
     std::wstring iconTip, linkTip;        // small info lines (tooltips, title link)
+    std::wstring buttons[2];              // labels of the buttons under the activity, "" = none
+    std::wstring buttonsTip;              // note: only others see the buttons
     bool         progress = false;        // progress bar (Listening)
     std::wstring elapsed;                 // "00:07 elapsed" (Playing), empty = none
     double       pos = 0, dur = 0;

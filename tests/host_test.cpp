@@ -19,6 +19,7 @@
 #include <windows.h>
 #endif
 
+#include "apiActions.h"
 #include "apiCore.h"
 #include "apiFileManager.h"
 #include "apiGUI.h"
@@ -163,8 +164,20 @@ public:
         *v = duration;
         return S_OK;
     }
-    HRESULT WINAPI GetValueAsInt32(INT32, INT32*) override { return E_FAIL; }
-    HRESULT WINAPI GetValueAsInt64(INT32, INT64*) override { return E_FAIL; }
+    std::map<int, INT32> ints;     // advanced placeholders: bitrate, play count, ...
+    std::map<int, INT64> int64s;   // file size
+    HRESULT WINAPI GetValueAsInt32(INT32 id, INT32* v) override {
+        auto it = ints.find(id);
+        if (it == ints.end()) return E_FAIL;
+        *v = it->second;
+        return S_OK;
+    }
+    HRESULT WINAPI GetValueAsInt64(INT32 id, INT64* v) override {
+        auto it = int64s.find(id);
+        if (it == int64s.end()) return E_FAIL;
+        *v = it->second;
+        return S_OK;
+    }
     HRESULT WINAPI GetValueAsObject(INT32 id, CONSTIID iid, void** v) override {
         auto o = objects.find(id);
         if (o != objects.end()) return o->second->QueryInterface(iid, v);
@@ -177,6 +190,29 @@ public:
     HRESULT WINAPI SetValueAsInt32(INT32, INT32) override { return E_NOTIMPL; }
     HRESULT WINAPI SetValueAsInt64(INT32, const INT64) override { return E_NOTIMPL; }
     HRESULT WINAPI SetValueAsObject(INT32, IUnknown*) override { return E_NOTIMPL; }
+};
+
+// hot key action registered by the plugin (AIMP lists it under Preferences > Hot keys)
+class Action : public Props<IAIMPAction> {
+public:
+    IAIMPActionEvent* event = nullptr;
+    ~Action() { if (event) event->Release(); }
+    HRESULT __unknwncall QueryInterface(REFIID riid, LPVOID* ppv) override {
+        if (Same(riid, IID_IAIMPAction)) { *ppv = static_cast<IAIMPAction*>(this); this->AddRef(); return S_OK; }
+        return Props<IAIMPAction>::QueryInterface(riid, ppv);
+    }
+    HRESULT WINAPI SetValueAsObject(INT32 id, IUnknown* v) override {
+        if (!v) return E_INVALIDARG;
+        IAIMPString* str = nullptr;
+        if (v->QueryInterface(IID_IAIMPString, reinterpret_cast<void**>(&str)) == S_OK && str) {
+            text[id] = mockui::StrOf(str);
+            str->Release();
+            return S_OK;
+        }
+        if (id != AIMP_ACTION_PROPID_EVENT) return E_INVALIDARG;
+        if (event) event->Release();
+        return v->QueryInterface(IID_IAIMPActionEvent, reinterpret_cast<void**>(&event));
+    }
 };
 
 class FileInfo : public Props<IAIMPFileInfo> {
@@ -443,6 +479,24 @@ public:
     }
 };
 
+// AIMP's formatter: knows %PlayCount from AIMP's statistics (playCount < 0: like an AIMP without it)
+class Formatter : public Obj<IAIMPServiceFileInfoFormatter> {
+public:
+    int playCount = -1;
+    int calls = 0;
+    HRESULT __unknwncall QueryInterface(REFIID riid, LPVOID* ppv) override {
+        if (Same(riid, IID_IAIMPServiceFileInfoFormatter)) { *ppv = static_cast<IAIMPServiceFileInfoFormatter*>(this); AddRef(); return S_OK; }
+        return Obj<IAIMPServiceFileInfoFormatter>::QueryInterface(riid, ppv);
+    }
+    HRESULT WINAPI Format(IAIMPString* t, IAIMPFileInfo* info, INT32, IUnknown*, IAIMPString** out) override {
+        ++calls;
+        if (!t || !info || !out || playCount < 0) return E_FAIL;
+        if (mockui::StrOf(t) != T("%PlayCount")) return E_FAIL;
+        *out = MakeStr(FromUtf8(std::to_string(playCount).c_str()));
+        return S_OK;
+    }
+};
+
 class Core : public Obj<IAIMPCore> {
 public:
     Player* player = new Player();
@@ -451,9 +505,11 @@ public:
     Mui* mui = new Mui();
     ShutdownService* shutdown = new ShutdownService();
     MessageDialog* message = new MessageDialog();
+    Formatter* formatter = new Formatter();
     mockui::Service ui;
     mockui::OptionsService options;
     IAIMPOptionsDialogFrame* frame = nullptr;
+    std::vector<Action*> actions;   // registered hot key actions
     HRESULT __unknwncall QueryInterface(REFIID riid, LPVOID* ppv) override {
         if (Same(riid, IID_IAIMPServicePlayer)) { player->AddRef(); *ppv = player; return S_OK; }
         if (Same(riid, IID_IAIMPServiceMessageDispatcher)) { dispatcher->AddRef(); *ppv = dispatcher; return S_OK; }
@@ -462,6 +518,7 @@ public:
         if (Same(riid, IID_IAIMPServiceShutdown)) { shutdown->AddRef(); *ppv = shutdown; return S_OK; }
         if (Same(riid, IID_IAIMPUIMessageDialog)) { message->AddRef(); *ppv = message; return S_OK; }
         if (Same(riid, IID_IAIMPServiceUI)) { *ppv = static_cast<IAIMPServiceUI*>(&ui); return S_OK; }
+        if (Same(riid, IID_IAIMPServiceFileInfoFormatter)) { formatter->AddRef(); *ppv = formatter; return S_OK; }
         if (Same(riid, IID_IAIMPServiceOptionsDialog)) { *ppv = static_cast<IAIMPServiceOptionsDialog*>(&options); return S_OK; }
         return Obj<IAIMPCore>::QueryInterface(riid, ppv);
     }
@@ -469,6 +526,7 @@ public:
         if (Same(iid, IID_IAIMPString)) { *obj = static_cast<IAIMPString*>(new String()); return S_OK; }
         if (Same(iid, IID_IAIMPMemoryStream)) { *obj = static_cast<IAIMPMemoryStream*>(new MemoryStream()); return S_OK; }
         if (Same(iid, IID_IAIMPImage)) { *obj = static_cast<IAIMPImage*>(new Image()); return S_OK; }
+        if (Same(iid, IID_IAIMPAction)) { *obj = static_cast<IAIMPAction*>(new Action()); return S_OK; }
         return E_NOTIMPL;
     }
     HRESULT WINAPI GetPath(int id, IAIMPString** v) override {   // AIMP_TEST_PROFILE: AIMP's profile folder
@@ -480,10 +538,20 @@ public:
     HRESULT WINAPI RegisterExtension(CONSTIID iid, IUnknown* ext) override {
         if (Same(iid, IID_IAIMPServiceOptionsDialog) && ext)
             ext->QueryInterface(IID_IAIMPOptionsDialogFrame, reinterpret_cast<void**>(&frame));
+        IAIMPAction* a = nullptr;
+        if (Same(iid, IID_IAIMPServiceActionManager) && ext &&
+            ext->QueryInterface(IID_IAIMPAction, reinterpret_cast<void**>(&a)) == S_OK && a)
+            actions.push_back(static_cast<Action*>(a));   // (keeps the reference)
         return S_OK;
     }
     HRESULT WINAPI RegisterService(IUnknown*) override { return E_NOTIMPL; }
     HRESULT WINAPI UnregisterExtension(IUnknown* ext) override {
+        for (size_t i = 0; i < actions.size(); ++i)
+            if (ext && static_cast<IUnknown*>(static_cast<IAIMPAction*>(actions[i])) == ext) {
+                actions[i]->Release();
+                actions.erase(actions.begin() + i);
+                return S_OK;
+            }
         if (frame && ext) { frame->Release(); frame = nullptr; }
         return S_OK;
     }
@@ -590,7 +658,7 @@ bool AllTranslated(Core* core) {
 #else
 #define kImageExt ".png"   // cairo image surface
 #endif
-bool RenderPreview(Core* core, const std::string& path, int scale, int nth = 0) {   // nth paint box: 0 preview, 1 avatar
+bool RenderPreview(Core* core, const std::string& path, int scale, int nth = 0) {   // nth paint box: 0 preview, 1 templates preview, 2 avatar
     Info paint;
     if (!FindKind(core, "Paint", paint, nth)) return false;
     const int w = (paint.bounds.right - paint.bounds.left) * scale, h = (paint.bounds.bottom - paint.bounds.top) * scale;
@@ -691,6 +759,26 @@ void RenderLayout(Core* core, const std::string& dir) {
     for (auto& getSheet : core->ui.reg.all) {
         Info sheet = getSheet();
         if (sheet.kind != mockui::Service::K("S")) continue;
+        // a scroll box on the sheet: its controls are drawn inside it, once at the top and once scrolled to the end
+        Info scroll = {}, panel = {};   // the controls are on a panel in the box
+        double scrollMax = 0;
+        for (auto& get : core->ui.reg.all) {
+            Info c = get();
+            if (c.parent == sheet.self && c.kind == mockui::Service::K("Scroll")) scroll = c;
+        }
+        for (auto& get : core->ui.reg.all) {
+            Info c = get();
+            if (scroll.self && c.parent == scroll.self && c.kind == mockui::Service::K("Panel")) panel = c;
+        }
+        if (scroll.self)
+            for (auto& get : core->ui.reg.all) {
+                Info c = get();
+                if (c.parent == (panel.self ? panel.self : scroll.self) && c.placed)
+                    scrollMax = std::max(scrollMax, c.bounds.bottom + 8.0 - (scroll.bounds.bottom - scroll.bounds.top));
+            }
+        ++page;
+        for (int pass = 0; pass < (scrollMax > 0 ? 2 : 1); ++pass) {
+        const double offset = pass ? scrollMax : 0;
         cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 490, 452);
         cairo_t* cr = cairo_create(surface);
         cairo_set_source_rgb(cr, 0.97, 0.97, 0.97);
@@ -706,9 +794,17 @@ void RenderLayout(Core* core, const std::string& dir) {
         cairo_translate(cr, 5, 29);
         for (auto& get : core->ui.reg.all) {
             Info c = get();
-            if (c.parent != sheet.self || !c.placed) continue;
-            const double x = c.bounds.left, y = c.bounds.top, w = c.bounds.right - c.bounds.left,
-                         h = c.bounds.bottom - c.bounds.top;
+            const bool inScroll = scroll.self && (c.parent == scroll.self || (panel.self && c.parent == panel.self));
+            if ((c.parent != sheet.self && !inScroll) || !c.placed || c.self == scroll.self || c.self == panel.self) continue;
+            const double x = c.bounds.left + (inScroll ? scroll.bounds.left : 0),
+                         y = c.bounds.top + (inScroll ? scroll.bounds.top - offset : 0),
+                         w = c.bounds.right - c.bounds.left, h = c.bounds.bottom - c.bounds.top;
+            cairo_save(cr);
+            if (inScroll) {   // only the visible part of the scroll box
+                cairo_rectangle(cr, scroll.bounds.left, scroll.bounds.top, scroll.bounds.right - scroll.bounds.left,
+                                scroll.bounds.bottom - scroll.bounds.top);
+                cairo_clip(cr);
+            }
             auto prop = [&](int id) { auto it = c.ints->find(id); return it == c.ints->end() ? -1LL : it->second; };
             auto str = [&](int id) { auto it = c.strs->find(id); return it == c.strs->end() ? TStr() : it->second; };
             if (prop(AIMPUI_CONTROL_PROPID_VISIBLE) == 0) {   // hidden: dashed outline
@@ -719,6 +815,7 @@ void RenderLayout(Core* core, const std::string& dir) {
                 cairo_rectangle(cr, x + 0.5, y + 0.5, w - 1, h - 1);
                 cairo_stroke(cr);
                 cairo_set_dash(cr, nullptr, 0, 0);
+                cairo_restore(cr);
                 continue;
             }
             const bool disabled = prop(AIMPUI_CONTROL_PROPID_ENABLED) == 0;
@@ -813,12 +910,24 @@ void RenderLayout(Core* core, const std::string& dir) {
                 cairo_rectangle(cr, x, y, w, h);
                 cairo_fill(cr);
             }
+            cairo_restore(cr);
+        }
+        if (scroll.self) {   // scroll bar
+            const double sx = scroll.bounds.right - 12, sy = scroll.bounds.top, sh = scroll.bounds.bottom - sy;
+            const double total = sh + scrollMax;
+            cairo_set_source_rgb(cr, 0.88, 0.88, 0.88);
+            cairo_rectangle(cr, sx, sy, 10, sh);
+            cairo_fill(cr);
+            cairo_set_source_rgb(cr, 0.6, 0.6, 0.6);
+            cairo_rectangle(cr, sx + 1, sy + sh * offset / total, 8, sh * sh / total);
+            cairo_fill(cr);
         }
         cairo_destroy(cr);
         char name[64];
-        snprintf(name, sizeof name, "/layout-%d.png", ++page);
+        snprintf(name, sizeof name, pass ? "/layout-%d-scrolled.png" : "/layout-%d.png", page);
         cairo_surface_write_to_png(surface, (dir + name).c_str());
         cairo_surface_destroy(surface);
+        }
     }
     printf("layout of %d tabs drawn to %s (%d texts too wide)\n", page, dir.c_str(), g_overflows);
 }
@@ -878,7 +987,20 @@ int TestSettingsPage(Core* core, bool uiOnly) {
         ++placedCount;
         if (i.anchors.left != 1 || i.anchors.top != 1) return Fail("control without top-left anchors");
         if (i.bounds.right <= i.bounds.left || i.bounds.bottom <= i.bounds.top) return Fail("control with empty bounds");
-        if (i.bounds.right > 465 || i.bounds.bottom > 420) return Fail("control outside the page / in the right margin");
+        // in a scroll box: left of its scroll bar (17 px), any height; the box itself fits the page
+        double maxRight = 465, maxBottom = 420;
+        for (auto& getBox : core->ui.reg.all) {
+            Info box = getBox();
+            if (box.self == i.parent && box.kind == mockui::Service::K("Scroll")) {
+                maxRight = box.bounds.right - box.bounds.left - 17;
+                maxBottom = 1e9;
+            }
+            if (box.self == i.parent && box.kind == mockui::Service::K("Panel")) {   // the panel in a scroll box
+                maxRight = box.bounds.right - box.bounds.left;
+                maxBottom = box.bounds.bottom;
+            }
+        }
+        if (i.bounds.right > maxRight || i.bounds.bottom > maxBottom) return Fail("control outside the page / in the right margin");
     }
     if (placedCount < 90) return Fail("too few placed controls");
 
@@ -894,7 +1016,7 @@ int TestSettingsPage(Core* core, bool uiOnly) {
                               : lang == "Українська" ? "  (встановлена)" : "  (installed)";
         const char* section = lang == "Русский" ? "Новое:" : lang == "Deutsch" ? "Neu:" : lang == "Українська" ? "Нове:" : "New:";
         Info changelog;
-        if (!FindKind(core, "Memo", changelog, 1)) return Fail("changelog memo");
+        if (!FindKind(core, "Memo", changelog, 6)) return Fail("changelog memo");
         const TStr text = (*changelog.strs)[AIMPUI_BASEEDIT_PROPID_TEXT];
         const size_t top = text.find(FromUtf8(AIMP_DISCORD_RPC_VERSION) + S(installed));
         if (top == TStr::npos || top > 400) return Fail("changelog with the installed version on top");
@@ -1028,6 +1150,160 @@ bool HasPicture(Core* core, int nth) {
            (*img.ints)[AIMPUI_CONTROL_PROPID_VISIBLE] == 1;
 }
 
+// Combo box whose items contain 'part'
+bool FindCombo(Core* core, const TStr& part, Info& out) {
+    for (auto& get : core->ui.reg.all) {
+        Info i = get();
+        if (i.kind != mockui::Service::K("Combo")) continue;
+        for (const TStr& item : *i.items)
+            if (item.find(part) != TStr::npos) { out = i; return true; }
+    }
+    return false;
+}
+
+TStr MemoText(Core* core, int nth) {
+    Info m;
+    return FindKind(core, "Memo", m, nth) ? (*m.strs)[AIMPUI_BASEEDIT_PROPID_TEXT] : TStr();
+}
+
+void SetMemo(Core* core, int nth, const TStr& text) {
+    Info m;
+    if (!FindKind(core, "Memo", m, nth)) return;
+    (*m.strs)[AIMPUI_BASEEDIT_PROPID_TEXT] = text;
+    m.fire();
+}
+
+void Select(Info& combo, int index) {
+    (*combo.ints)[AIMPUI_COMBOBOX_PROPID_ITEMINDEX] = index;
+    combo.fire();
+}
+
+// Templates tab (advanced run): own texts while paused, presets (list + hot key), buttons. Frames are checked by
+// check_advanced.py: "Paused: Freddie Mercury" while paused, "Changed 320" after a change, then the preset again.
+int TestTemplateSets(Core* core) {
+    Info sets, presets;
+    if (!FindCombo(core, T("Radio / stream"), sets)) return Fail("\"Texts for\" list");
+    if (!FindCombo(core, T("1: (free)"), presets)) return Fail("preset list with free slots");
+    if (presets.items->size() != 10) return Fail("10 preset slots");
+    const TStr issue = MemoText(core, 0);
+    Select(sets, 1);   // pause: the fields start empty (= the texts for playback)
+    if (!MemoText(core, 0).empty()) return Fail("pause texts should start empty");
+    SetMemo(core, 0, T("Paused:\n  %composer%"));
+    Select(sets, 0);
+    if (MemoText(core, 0) != issue) return Fail("playback texts after switching back");
+    Info save;
+    if (!FindControl(core, "Button", AIMPUI_BUTTON_PROPID_CAPTION, T("Save"), save)) return Fail("preset save button");
+    save.fire();   // first free slot, default name
+    if ((*presets.items)[0] != T("1: Preset 1")) return Fail("preset 1 not saved");
+    SetMemo(core, 0, T("Changed %bitrate%"));
+    Select(presets, 0);   // loading the preset brings its texts back
+    if (MemoText(core, 0) != issue) return Fail("preset not loaded into the fields");
+    printf("templates: pause texts, preset saved and loaded\n");
+
+    // show paused, buttons on; apply
+    Info paused, buttons;
+    if (!FindCombo(core, T("Show \"Paused\" status"), paused)) return Fail("paused behaviour list");
+    Select(paused, 0);
+    if (!FindControl(core, "Check", AIMPUI_CHECKBOX_PROPID_CAPTION,
+                     T("Show two buttons under the status (only others see them, not you)"), buttons))
+        return Fail("buttons check box");
+    (*buttons.ints)[AIMPUI_CHECKBOX_PROPID_STATE] = AIMPUI_CHECKSTATE_CHECKED;
+    buttons.fire();
+    if (!RenderPreview(core, Env("AIMP_TEST_OUT", ".") + "/preview-buttons" kImageExt, 1, 0))
+        return Fail("preview with buttons not drawn");
+    core->frame->Notification(AIMP_SERVICE_OPTIONSDIALOG_NOTIFICATION_SAVE);
+    Tick(core, 3);
+    core->player->state = 1;   // pause
+    core->dispatcher->Fire(AIMP_MSG_EVENT_PLAYER_STATE);
+    Tick(core, 6);
+    core->player->state = 2;
+    core->dispatcher->Fire(AIMP_MSG_EVENT_PLAYER_STATE);
+    Tick(core, 6);
+    printf("templates: paused text sent\n");
+
+    // another text applied, then preset 1 by its hot key
+    SetMemo(core, 0, T("Changed %bitrate%"));
+    core->frame->Notification(AIMP_SERVICE_OPTIONSDIALOG_NOTIFICATION_SAVE);
+    Tick(core, 6);
+    if (core->actions.size() != 12) return Fail("12 hot key actions (on / off, next, 10 presets)");
+    Action* one = nullptr;
+    for (Action* a : core->actions)
+        if (a->text[AIMP_ACTION_PROPID_ID] == T("aimp_discord_rpc.preset.1")) one = a;
+    if (!one || !one->event) return Fail("hot key action for preset 1");
+    if (one->text[AIMP_ACTION_PROPID_NAME] != T("Load preset 1: Preset 1") ||
+        one->text[AIMP_ACTION_PROPID_GROUPNAME] != T("Discord Rich Presence"))
+        return Fail("name of the hot key action");
+    one->event->OnExecute(nullptr);
+    if (MemoText(core, 0) != issue) return Fail("open settings page does not show the preset of the hot key");
+    Tick(core, 6);
+    printf("templates: preset loaded by hot key\n");
+
+    // automatic presets: rule 1 "Title contains rhapsody -> preset 1"; first another text applied without rules
+    SetMemo(core, 0, T("Base %bitrate%"));
+    core->frame->Notification(AIMP_SERVICE_OPTIONSDIALOG_NOTIFICATION_SAVE);
+    Tick(core, 6);
+    Info autoCheck, field, op, preset, text;
+    if (!FindControl(core, "Check", AIMPUI_CHECKBOX_PROPID_CAPTION,
+                     T("Switch presets automatically (the first matching rule wins)"), autoCheck))
+        return Fail("automatic presets check box");
+    if (!FindCombo(core, T("Comment"), field) || !FindCombo(core, T("equals"), op) || !FindCombo(core, T("(off)"), preset))
+        return Fail("rule 1 lists");
+    for (auto& get : core->ui.reg.all) {   // the text field of rule 1: next to its lists
+        Info i = get();
+        if (i.kind == mockui::Service::K("Edit") && i.parent == field.parent && i.bounds.top == field.bounds.top) text = i;
+    }
+    if (!text.self) return Fail("rule 1 text field");
+    if (preset.items->size() != 11 || (*preset.items)[1] != T("1: Preset 1")) return Fail("presets of a rule");
+    (*autoCheck.ints)[AIMPUI_CHECKBOX_PROPID_STATE] = AIMPUI_CHECKSTATE_CHECKED;
+    autoCheck.fire();
+    Select(field, 4);   // title
+    Select(op, 0);      // contains
+    (*text.strs)[AIMPUI_BASEEDIT_PROPID_TEXT] = T("nothing; RHAPSODY");
+    text.fire();
+    Select(preset, 1);
+    TStr line;
+    RenderPreview(core, Env("AIMP_TEST_OUT", ".") + "/preview-rule-manual" kImageExt, 1, 1);
+    if (!ContainsLabel(core, T("Current track: preset chosen by hand"), &line)) {   // the hot key above wins for this track
+        if (ContainsLabel(core, T("Current track"), &line)) printf("rule line: %s\n", line.c_str());
+        return Fail("\"preset by hand\" line");
+    }
+    printf("templates: %s\n", line.c_str());
+    core->frame->Notification(AIMP_SERVICE_OPTIONSDIALOG_NOTIFICATION_SAVE);
+    Tick(core, 6);
+    // next track: the rule picks preset 1
+    core->player->info->text[AIMP_FILEINFO_PROPID_TITLE] = T("Bohemian Rhapsody (Live)");
+    core->player->pos = 0;
+    core->dispatcher->Fire(AIMP_MSG_EVENT_STREAM_START);
+    Tick(core, 3);
+    RenderPreview(core, Env("AIMP_TEST_OUT", ".") + "/preview-rule" kImageExt, 1, 1);
+    if (!ContainsLabel(core, T("Current track: rule 1"), &line)) {
+        if (ContainsLabel(core, T("Current track"), &line)) printf("rule line: %s\n", line.c_str());
+        return Fail("\"rule in use\" line");
+    }
+    printf("templates: %s\n", line.c_str());
+    printf("templates: rule 1 picks preset 1\n");
+    Action* next = nullptr;
+    Action* toggle = nullptr;
+    for (Action* a : core->actions) {
+        if (a->text[AIMP_ACTION_PROPID_ID] == T("aimp_discord_rpc.preset.next")) next = a;
+        if (a->text[AIMP_ACTION_PROPID_ID] == T("aimp_discord_rpc.toggle")) toggle = a;
+    }
+    if (!next || !toggle || !toggle->event) return Fail("hot key actions next / on-off");
+    if (toggle->text[AIMP_ACTION_PROPID_NAME] != T("Discord display on / off")) return Fail("name of the on / off action");
+    // on / off: the presence goes away and comes back, the open page follows
+    Info enable;
+    if (!FindControl(core, "Check", AIMPUI_CHECKBOX_PROPID_CAPTION, T("Enable Discord Rich Presence"), enable))
+        return Fail("enable check box");
+    toggle->event->OnExecute(nullptr);
+    Tick(core, 4);
+    if ((*enable.ints)[AIMPUI_CHECKBOX_PROPID_STATE] != AIMPUI_CHECKSTATE_UNCHECKED) return Fail("hot key on / off: still on");
+    toggle->event->OnExecute(nullptr);
+    Tick(core, 6);
+    if ((*enable.ints)[AIMPUI_CHECKBOX_PROPID_STATE] != AIMPUI_CHECKSTATE_CHECKED) return Fail("hot key on / off: still off");
+    printf("templates: Discord display off and on by hot key\n");
+    return -1;
+}
+
 int RunTests(Core* core) {
     const bool uiOnly = Env("AIMP_TEST_UI_ONLY") == "1";
     const bool upload = Env("AIMP_TEST_UPLOAD") == "1";   // the track's folder image goes to (fake) catbox.moe
@@ -1047,6 +1323,48 @@ int RunTests(Core* core) {
         core->dispatcher->Fire(AIMP_MSG_EVENT_STREAM_START);
         Tick(core, 3);
         return -1;   // no settings page in this run: just finalize
+    }
+    if (Env("AIMP_TEST_ADVANCED") == "1") {   // advanced placeholders: more fields and %IF... (GitHub issue #4)
+        FileInfo* info = core->player->info;
+        info->text[AIMP_FILEINFO_PROPID_COMPOSER] = T("Freddie Mercury");
+        info->text[AIMP_FILEINFO_PROPID_COMMENT] = T("");
+        info->ints[AIMP_FILEINFO_PROPID_BITRATE] = 320;
+        info->int64s[AIMP_FILEINFO_PROPID_FILESIZE] = 14176256;
+        core->formatter->playCount = Env("AIMP_TEST_FORMATTER") == "0" ? -1 : 7;
+        info->ints[AIMP_FILEINFO_PROPID_ML_PLAYCOUNT] = 7;   // the music library's value (fallback)
+        core->player->state = 2;
+        core->player->pos = 30;
+        core->player->dur = 354;
+        core->dispatcher->Fire(AIMP_MSG_EVENT_PLAYER_STATE);
+        Tick(core, 4);
+        printf("advanced: play count 7\n");
+        // AIMP counts the track as played: the text follows without a new track
+        core->formatter->playCount = core->formatter->playCount < 0 ? -1 : 8;
+        info->ints[AIMP_FILEINFO_PROPID_ML_PLAYCOUNT] = 8;
+        Tick(core, 6);
+        printf("advanced: play count 8\n");
+        // a comment wins (first branch of %IF)
+        info->text[AIMP_FILEINFO_PROPID_COMMENT] = T("Live at\r\nWembley");
+        Tick(core, 6);
+        printf("advanced: comment\n");
+        // never played, no comment: the file size
+        info->text[AIMP_FILEINFO_PROPID_COMMENT] = T("");
+        core->formatter->playCount = core->formatter->playCount < 0 ? -1 : 0;
+        info->ints.erase(AIMP_FILEINFO_PROPID_ML_PLAYCOUNT);
+        Tick(core, 6);
+        printf("advanced: formatter calls %d\n", core->formatter->calls);
+        if (TestSettingsPage(core, true)) return 1;   // the Templates tab is shown, the texts are in its fields
+        Info tpl;
+        if (!FindControl(core, "S", AIMPUI_TABSHEET_PROPID_CAPTION, T("Templates"), tpl) ||
+            (*tpl.ints)[AIMPUI_TABSHEET_PROPID_VISIBLE] != 1)
+            return Fail("Templates tab not shown with advanced placeholders");
+        Info memo;
+        if (!FindKind(core, "Memo", memo, 0) || (*memo.strs)[AIMPUI_BASEEDIT_PROPID_TEXT].find(T("%IFGreater")) == TStr::npos)
+            return Fail("first line not in the multi-line field");
+        if (!RenderPreview(core, Env("AIMP_TEST_OUT", ".") + "/preview-advanced" kImageExt, 1, 1))
+            return Fail("templates preview not drawn");
+        printf("advanced: Templates tab shown, texts in the multi-line fields\n");
+        return TestTemplateSets(core);
     }
     if (TestSettingsPage(core, uiOnly || upload)) return 1;
     if (upload) {
@@ -1084,14 +1402,14 @@ int RunTests(Core* core) {
         bool avatar = false;
         for (int i = 0; i < 20 && !avatar; ++i) {
             const int before = g_imageDraws;
-            if (!RenderPreview(core, Env("AIMP_TEST_OUT", ".") + "/about-avatar" kImageExt, 2, 1))
+            if (!RenderPreview(core, Env("AIMP_TEST_OUT", ".") + "/about-avatar" kImageExt, 2, 2))
                 return Fail("no paint box for the author picture");
             avatar = g_imageDraws > before;
             if (!avatar) Tick(core, 1);
         }
         if (!avatar) return Fail("author picture not drawn on the About tab");
         Info log;
-        if (!FindKind(core, "Memo", log, 0) || log.lines->empty()) return Fail("log lines on the Advanced tab");
+        if (!FindKind(core, "Memo", log, 5) || log.lines->empty()) return Fail("log lines on the Advanced tab");
         printf("settings page: status, cover source, pictures and log OK (%d log lines)\n", (int)log.lines->size());
         const std::string out = Env("AIMP_TEST_OUT", ".");
         if (!RenderPreview(core, out + "/preview-playing" kImageExt, 1) ||

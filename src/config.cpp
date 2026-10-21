@@ -15,8 +15,12 @@ std::mutex g_fileMu;    // file access + g_stamp; serializes writers
 uint64_t   g_stamp = 0;
 
 const wchar_t* const kSection = L"DiscordRPC";
-const int kConfigVersion = 7;   // 5 = 1.5.0 (one INI format for both platforms, UTF-16 on Windows), 6 = 1.5.3 (x0.at),
-                                // 7 = 1.5.4 (RotateSeconds)
+const int kConfigVersion = 9;   // 5 = 1.5.0 (one INI format for both platforms, UTF-16 on Windows), 6 = 1.5.3 (x0.at),
+                                // 7 = 1.5.4 (RotateSeconds), 8 = AdvancedPlaceholders, 9 = 1.6.0 (texts for pause /
+                                // streams, presets, buttons)
+
+const wchar_t* const kFieldKeys[4] = {L"Details", L"State", L"LargeText", L"SmallText"};
+const wchar_t* const kSetKeys[3] = {L"", L"Paused", L"Stream"};
 
 #ifdef _WIN32
 const wchar_t* const kEol = L"\r\n";
@@ -45,6 +49,7 @@ struct Reader {
     void Int(const wchar_t* k, int& v) const { long long x = v; Num(k, x); v = (int)x; }
     void I64(const wchar_t* k, int64_t& v) const { long long x = v; Num(k, x); v = (int64_t)x; }
     void Bool(const wchar_t* k, bool& v) const { long long x = v ? 1 : 0; Num(k, x); v = x != 0; }
+    bool Skip(bool) const { return false; }   // every key is looked for
 };
 
 // Writes "key=value" lines (one line per value) in the order of the Visit functions.
@@ -60,6 +65,7 @@ struct Writer {
     void Int(const wchar_t* k, long long v) { Str(k, std::to_wstring(v)); }
     void I64(const wchar_t* k, int64_t v) { Int(k, (long long)v); }
     void Bool(const wchar_t* k, bool v) { Int(k, v ? 1 : 0); }
+    bool Skip(bool unused) const { return unused; }   // free preset slots are not written
 };
 
 // The one list of all settings (used for reading, writing and exporting).
@@ -75,13 +81,17 @@ void VisitSettings(C& c, V& v) {
     v.Int(L"ClearAfterPausedMin", c.clearAfterPaused);
     v.Bool(L"HideStreams", c.hideStreams);
     v.Str(L"ExcludePaths", c.excludePaths);
-    v.Section(L"Display (placeholders: %artist% %title% %album% %albumartist% %genre% %year% %track% %playlist% "
+    v.Section(L"Display (placeholders: %artist% %title% %album% %albumartist% %genre% %year% %track% %playlist% %next% "
               L"%filename% %ext% %pos% %dur% %percent% %bar% %status%; several texts \"a || b\" switch every "
-              L"RotateSeconds)");
+              L"RotateSeconds; AdvancedPlaceholders=1: more fields and %IF(A,B,C) %IFEqual(A,B,C,D) "
+              L"%IFGreater(A,B,C,D) %IFGreaterOrEqual(A,B,C,D), see README)");
+    v.Bool(L"AdvancedPlaceholders", c.advancedTemplates);
     v.Str(L"Details", c.details);
     v.Str(L"State", c.state);
     v.Str(L"LargeText", c.largeText);
     v.Str(L"SmallText", c.smallText);
+    for (int set = 1; set < 3; ++set)
+        for (int f = 0; f < 4; ++f) v.Str((std::wstring(kSetKeys[set]) + kFieldKeys[f]).c_str(), TemplateText(c, set, f));
     v.Bool(L"ShowSmallIcon", c.showSmallIcon);
     v.Int(L"BarLength", c.barLength);
     v.Int(L"RefreshSeconds", c.refreshSeconds);
@@ -89,6 +99,34 @@ void VisitSettings(C& c, V& v) {
     v.Bool(L"TitleLink", c.titleLink);
     v.Bool(L"TitleLinkCustom", c.titleLinkCustom);
     v.Str(L"TitleLinkUrl", c.titleLinkUrl);
+    v.Bool(L"Buttons", c.buttons);   // two buttons under the presence (only others see them)
+    v.Str(L"Button1Label", c.button1Label);
+    v.Str(L"Button1Url", c.button1Url);
+    v.Str(L"Button2Label", c.button2Label);
+    v.Str(L"Button2Url", c.button2Url);
+    v.Section(L"Presets of the Templates tab (Preset<N>Name, Preset<N><texts>; loaded with AIMP hot keys too)");
+    v.Int(L"ActivePreset", c.activePreset);
+    for (int i = 0; i < Config::kPresets; ++i) {
+        auto& p = c.presets[i];
+        if (v.Skip(p.name.empty())) continue;
+        const std::wstring pre = L"Preset" + std::to_wstring(i + 1);
+        v.Str((pre + L"Name").c_str(), p.name);
+        for (int set = 0; set < 3; ++set)
+            for (int f = 0; f < 4; ++f) v.Str((pre + kSetKeys[set] + kFieldKeys[f]).c_str(), p.texts[set * 4 + f]);
+    }
+    v.Section(L"Automatic presets (Rule<N>Field: 0 = playlist, 1 = genre, 2 = artist, 3 = album, 4 = title, "
+              L"5 = file path, 6 = comment, 7 = codec, 8 = radio / stream; Rule<N>Equals: 0 = contains, "
+              L"1 = equals; Rule<N>Text: ';' separated; Rule<N>Preset: 1..10)");
+    v.Bool(L"AutoPresets", c.autoPresets);
+    for (int i = 0; i < Config::kRules; ++i) {
+        auto& r = c.rules[i];
+        if (v.Skip(r.preset == 0 && r.text.empty())) continue;
+        const std::wstring pre = L"Rule" + std::to_wstring(i + 1);
+        v.Int((pre + L"Field").c_str(), r.field);
+        v.Bool((pre + L"Equals").c_str(), r.equals);
+        v.Str((pre + L"Text").c_str(), r.text);
+        v.Int((pre + L"Preset").c_str(), r.preset);
+    }
     v.Section(L"Cover art (UploadHost: 0 = off, 1 = catbox.moe, 2 = Imgur, 3 = x0.at)");
     v.Bool(L"CoverEnabled", c.coverEnabled);
     v.Bool(L"CoverEmbedded", c.srcEmbedded);
@@ -170,8 +208,45 @@ Config FromText(const std::wstring& text, bool* found = nullptr, long long* vers
     c.pausedBehavior = Clamp(c.pausedBehavior, 0, 1);
     if (c.uploadHost < 0 || c.uploadHost > 3) c.uploadHost = 3;
     c.updateFrequency = Clamp(c.updateFrequency, 0, 3);
+    c.activePreset = Clamp(c.activePreset, 0, Config::kPresets);
+    for (auto& r : c.rules) {
+        r.field = Clamp(r.field, 0, Config::kRuleFields - 1);
+        r.preset = Clamp(r.preset, 0, Config::kPresets);
+    }
     return c;
 }
+
+}  // namespace
+
+std::wstring& TemplateText(Config& c, int set, int field) {
+    field &= 3;
+    if (set == 1) return c.pausedTexts[field];
+    if (set == 2) return c.streamTexts[field];
+    std::wstring* normal[4] = {&c.details, &c.state, &c.largeText, &c.smallText};
+    return *normal[field];
+}
+const std::wstring& TemplateText(const Config& c, int set, int field) {
+    return TemplateText(const_cast<Config&>(c), set, field);
+}
+
+void SavePreset(Config& c, int index, const std::wstring& name) {
+    if (index < 0 || index >= Config::kPresets) return;
+    Config::Preset& p = c.presets[index];
+    p.name = util::Trim(name);
+    if (p.name.empty()) p.name = L"Preset " + std::to_wstring(index + 1);
+    for (int i = 0; i < 12; ++i) p.texts[i] = TemplateText(c, i / 4, i % 4);
+    c.activePreset = index + 1;
+}
+
+bool LoadPreset(Config& c, int index) {
+    if (index < 0 || index >= Config::kPresets || c.presets[index].name.empty()) return false;
+    for (int i = 0; i < 12; ++i) TemplateText(c, i / 4, i % 4) = c.presets[index].texts[i];
+    c.advancedTemplates = true;   // presets belong to the Templates tab
+    c.activePreset = index + 1;
+    return true;
+}
+
+namespace {
 
 void Store(Config c) {   // publishes the config (with its computed fields)
     config::Resolve(c);

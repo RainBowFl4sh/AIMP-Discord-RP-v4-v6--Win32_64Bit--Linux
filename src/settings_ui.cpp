@@ -10,6 +10,7 @@
 #endif
 
 #include "i18n.h"
+#include "template.h"
 #include "jobs.h"
 #include "update.h"
 #include "util.h"
@@ -25,10 +26,16 @@ namespace {
 enum Ids {
     // General
     IDC_ENABLE = 200, IDC_TYPE, IDC_STATUSDISP, IDC_TIMESTAMPS, IDC_PAUSED, IDC_PAUSEDMIN, IDC_HIDESTREAMS, IDC_EXCLUDE,
-    IDC_STATUS, IDC_APPNAME,
+    IDC_STATUS, IDC_APPNAME, IDC_BUTTONS, IDC_BTN1LABEL, IDC_BTN1URL, IDC_BTN2LABEL, IDC_BTN2URL, IDC_DISPSCROLL,
     // Display
     IDC_DETAILS = 300, IDC_STATE, IDC_LARGETEXT, IDC_SMALLTEXT, IDC_SMALLICON, IDC_BARLEN, IDC_REFRESH, IDC_TITLELINK,
-    IDC_TITLELINKCUSTOM, IDC_TITLELINKURL, IDC_PREVIEW, IDC_ROTATE,
+    IDC_TITLELINKCUSTOM, IDC_TITLELINKURL, IDC_PREVIEW, IDC_ROTATE, IDC_ADVANCED, IDC_PLACEHOLDERS,
+    // Templates (advanced placeholders, only shown when they are switched on)
+    IDC_TPLDETAILS = 350, IDC_TPLSTATE, IDC_TPLLARGETEXT, IDC_TPLSMALLTEXT, IDC_TPLPREVIEW, IDC_PRESET, IDC_PRESETNAME,
+    IDC_PRESETSAVE, IDC_PRESETDELETE, IDC_TPLSET, IDC_TPLSETHINT, IDC_TPLLIST, IDC_TPLSCROLL, IDC_AUTOPRESETS,
+    IDC_AUTOHINT, IDC_RULESTATUS,
+    // automatic preset rules: one id per rule and column
+    IDC_RULEFIELD = 3000, IDC_RULEOP = 3010, IDC_RULETEXT = 3020, IDC_RULEPRESET = 3030,
     // Cover art
     IDC_COVER = 400, IDC_EMBEDDED, IDC_FOLDER, IDC_FOLDERNAMES, IDC_UPLOADHOST, IDC_IMGURID, IDC_PREFERLOCAL,
     IDC_CLEARCACHE, IDC_CACHEINFO, IDC_COVERIMG, IDC_COVERINFO, IDC_COVERLINK,
@@ -47,6 +54,11 @@ enum Kind { kLabel, kCheck, kEdit, kCombo, kButton, kMemo, kImage, kPaint };
 
 const int kRowH = 22;   // height of edits / combos
 const int kTabDisplay = 1;
+const int kTabTemplates = 2;
+// Display tab edit -> the multi-line field of the same text on the Templates tab (fields in TemplateText order)
+const int kTemplateFields[][2] = {{IDC_DETAILS, IDC_TPLDETAILS}, {IDC_STATE, IDC_TPLSTATE},
+                                  {IDC_LARGETEXT, IDC_TPLLARGETEXT}, {IDC_SMALLTEXT, IDC_TPLSMALLTEXT}};
+const char* const kSetHints[3] = {nullptr, "Tpl.HintPaused", "Tpl.HintStream"};
 
 #ifdef _WIN32
 const wchar_t* const kNewLine = L"\r\n";
@@ -57,7 +69,7 @@ const wchar_t* const kNewLine = L"\n";
 std::wstring RepoUrl() { return L"https://github.com/" + util::FromUtf8(AIMP_DISCORD_RPC_REPO); }
 
 // Forwards the events of one control: changes (check box, edit, combo box, button click) and drawing (paint box).
-class Events final : public IAIMPUIChangeEvents, public IAIMPUIDrawEvents {
+class Events final : public IAIMPUIChangeEvents, public IAIMPUIDrawEvents, public IAIMPUIMouseWheelEvents {
 public:
     Events(SettingsPage* page, int id) : page_(page), id_(id) {}
 
@@ -67,6 +79,8 @@ public:
             *ppv = static_cast<IAIMPUIChangeEvents*>(this);
         } else if (SameIID(riid, IID_IAIMPUIDrawEvents)) {
             *ppv = static_cast<IAIMPUIDrawEvents*>(this);
+        } else if (SameIID(riid, IID_IAIMPUIMouseWheelEvents)) {   // scroll boxes in AIMP 4 (see BeginScroll)
+            *ppv = static_cast<IAIMPUIMouseWheelEvents*>(this);
         } else {
             *ppv = nullptr;
             return E_NOINTERFACE;
@@ -89,6 +103,9 @@ public:
     void WINAPI OnDraw(IUnknown*, HCANVAS canvas, const RECT r) override {
 #endif
         if (page_) page_->OnDraw(id_, canvas, r);
+    }
+    BOOL WINAPI OnMouseWheel(IUnknown*, INT32 delta, INT32, INT32, WORD) override {
+        return page_ && page_->OnWheel(id_, delta) ? 1 : 0;
     }
     void Detach() { page_ = nullptr; }
 
@@ -129,9 +146,9 @@ private:
     std::atomic<long> ref_{1};
 };
 
-const int kPages = 6;
-const char* const kTabKeys[kPages] = {"Tab.General", "Tab.Display", "Tab.Cover", "Tab.Sources", "Tab.Advanced",
-                                      "Tab.About"};
+const int kPages = 7;
+const char* const kTabKeys[kPages] = {"Tab.General", "Tab.Display", "Tab.Templates", "Tab.Cover", "Tab.Sources",
+                                      "Tab.Advanced", "Tab.About"};
 
 bool OnlyChars(const std::string& s, const char* allowed) {
     return !s.empty() && s.find_first_not_of(allowed) == std::string::npos;
@@ -208,6 +225,17 @@ std::wstring Wrap(const std::wstring& text, size_t width) {
     return out;
 }
 
+// Markdown links "[text](url)" -> "text"
+std::wstring StripLinks(std::wstring s) {
+    for (size_t a = s.find(L'['); a != std::wstring::npos; a = s.find(L'[', a + 1)) {
+        const size_t b = s.find(L"](", a);
+        const size_t c = b == std::wstring::npos ? b : s.find(L')', b);
+        if (c == std::wstring::npos) break;
+        s = s.substr(0, a) + s.substr(a + 1, b - a - 1) + s.substr(c + 1);
+    }
+    return s;
+}
+
 // CHANGELOG.md -> plain text for the memo on the About tab (the newest version - the installed one - first)
 std::wstring ChangelogText() {
     std::wstring out, item;
@@ -221,7 +249,7 @@ std::wstring ChangelogText() {
     for (std::wstring line : util::Split(util::FromUtf8(EmbeddedChangelog()), L'\n')) {
         if (!line.empty() && line.back() == L'\r') line.pop_back();
         const bool nested = line.rfind(L"  ", 0) == 0;
-        std::wstring t = util::ReplaceAll(util::ReplaceAll(util::Trim(line), L"*", L""), L"`", L"");   // Markdown
+        std::wstring t = StripLinks(util::ReplaceAll(util::ReplaceAll(util::Trim(line), L"*", L""), L"`", L""));   // Markdown
         if (t.rfind(L"## ", 0) == 0) {
             flush();
             std::wstring v = t.substr(3);
@@ -243,6 +271,22 @@ std::wstring ChangelogText() {
         }
     }
     flush();
+    return out;
+}
+
+// Read-only list on the Templates tab: every placeholder and function
+std::wstring PlaceholderList() {
+    std::wstring out;
+    for (const std::wstring& line : {
+             T("Tpl.ListBasic") + L" %artist% %title% %album% %albumartist% %genre% %year% %track% %playlist% "
+                                  L"%next% %filename% %ext% %pos% %dur% %percent% %bar% %status%",
+             T("Tpl.ListMore") + L" %comment% %composer% %lyricist% %conductor% %copyright% %mood% %isrc% %key% "
+                                 L"%disc% %disctotal% %tracktotal% %bitrate% %samplerate% %channels% %bitdepth% "
+                                 L"%bpm% %rating% %codec% %filesize% %filesizebytes% %playcount%",
+             T("Tpl.ListFuncs") + L" %IF(A,B,C) %IFEqual(A,B,C,D) %IFGreater(A,B,C,D) %IFGreaterOrEqual(A,B,C,D)",
+             T("Tpl.ListEscape"), T("Tpl.ListBreaks")})
+        out += Wrap(line, 60);
+    while (!out.empty() && (out.back() == L'\n' || out.back() == L'\r')) out.pop_back();
     return out;
 }
 
@@ -317,10 +361,12 @@ bool SettingsPage::Build(HWND parent) {
     }
     BuildGeneral(sheets[0]);
     BuildDisplay(sheets[1]);
-    BuildCover(sheets[2]);
-    BuildSources(sheets[3]);
-    BuildAdvanced(sheets[4]);
-    BuildAbout(sheets[5]);
+    BuildTemplates(sheets[2]);
+    BuildCover(sheets[3]);
+    BuildSources(sheets[4]);
+    BuildAdvanced(sheets[5]);
+    BuildAbout(sheets[6]);
+    templatesSheet_ = sheets[kTabTemplates];
     tabs_->SetValueAsInt32(AIMPUI_PAGECONTROL_PROPID_ACTIVE, 0);
 
     hwnd_ = form_->GetHandle();
@@ -401,6 +447,47 @@ void SettingsPage::Place(IAIMPUIControl* c, int x, int y, int w, int h) {
     pl.Bounds.right = x + w;
     pl.Bounds.bottom = y + h;
     c->SetPlacement(pl);
+    if (building_) {
+        building_->rows.push_back({c, y, y + h});
+        building_->content = std::max(building_->content, y + h);
+    }
+}
+
+// A scroll box filling the page above the live preview. The mouse wheel is AIMP's job from AIMP 5 on (and in AIMP
+// for Linux, which stops scrolling when a wheel handler is attached); for AIMP 4 the page scrolls (OnWheel).
+IAIMPUIWinControl* SettingsPage::BeginScroll(IAIMPUIWinControl* page, int id, int height) {
+#ifdef _WIN32
+    const bool ownWheel = aimp::Version(core_) < 500;
+#else
+    const bool ownWheel = false;
+#endif
+    IAIMPUIControl* box = Create(page, id, IID_IAIMPUIScrollBox, ownWheel);
+    if (!box) return page;
+    box->SetValueAsInt32(AIMPUI_SCROLLBOX_PROPID_BORDERS, 0);
+    Place(box, 0, 0, 465, height);   // the scroll bar takes the right 17 px: controls end at 440
+    // The controls go onto one panel in the box, so scrolling moves one window. AIMP for Linux moves every child of
+    // the box itself and leaves some of them in the wrong place when there are many (dragging the scroll bar).
+    // AIMP 4 scrolls by MakeVisible (OnWheel), which only works for the box's own children: no panel there.
+    IAIMPUIControl* panel = ownWheel ? nullptr : Create(static_cast<IAIMPUIScrollBox*>(box), 0, IID_IAIMPUIPanel, false);
+    if (panel) {
+        panel->SetValueAsInt32(AIMPUI_PANEL_PROPID_BORDERS, 0);
+        panel->SetValueAsInt32(AIMPUI_PANEL_PROPID_TRANSPARENT, 1);
+        Place(panel, 0, 0, 448, height);
+    }
+    building_ = &scrolls_[id];
+    building_->height = height;
+    building_->panel = panel;
+    return panel ? static_cast<IAIMPUIWinControl*>(static_cast<IAIMPUIPanel*>(panel))
+                 : static_cast<IAIMPUIScrollBox*>(box);
+}
+
+void SettingsPage::EndScroll() {
+    if (building_ && building_->panel) {   // the panel as high as its controls: the box scrolls that far
+        ScrollArea* a = building_;
+        building_ = nullptr;
+        Place(a->panel, 0, 0, 448, a->content + 8);
+    }
+    building_ = nullptr;
 }
 
 void SettingsPage::Text(IAIMPUIControl* c, int prop, const char* key) {
@@ -469,11 +556,11 @@ void SettingsPage::Button(IAIMPUIWinControl* p, int id, const char* key, int x, 
     Place(c, x, y, w, 25);
 }
 
-void SettingsPage::Memo(IAIMPUIWinControl* p, int id, int x, int y, int w, int h) {
-    IAIMPUIControl* c = Create(p, id, IID_IAIMPUIMemo, false);
+void SettingsPage::Memo(IAIMPUIWinControl* p, int id, int x, int y, int w, int h, bool editable) {
+    IAIMPUIControl* c = Create(p, id, IID_IAIMPUIMemo, editable);
     if (!c) return;
     kinds_[id] = kMemo;
-    c->SetValueAsInt32(AIMPUI_BASEEDIT_PROPID_READONLY, 1);
+    c->SetValueAsInt32(AIMPUI_BASEEDIT_PROPID_READONLY, editable ? 0 : 1);
     Place(c, x, y, w, h);
 }
 
@@ -603,22 +690,81 @@ void SettingsPage::BuildGeneral(IAIMPUIWinControl* p) {
     Label(p, nullptr, 10, y, 455, 34, IDC_STATUS);
 }
 
-void SettingsPage::BuildDisplay(IAIMPUIWinControl* p) {
+void SettingsPage::BuildDisplay(IAIMPUIWinControl* page) {
+    // the settings scroll (title link and buttons are below the fold), the live preview stays at the bottom
+    const int boxH = 420 - kPreviewHeight - 6;
+    IAIMPUIWinControl* p = BeginScroll(page, IDC_DISPSCROLL, boxH);
     int y = 8;
-    Label(p, "Disp.Details", 10, y + 3, 145);   Edit(p, IDC_DETAILS, 160, y, 305);         y += 26;
-    Label(p, "Disp.State", 10, y + 3, 145);     Edit(p, IDC_STATE, 160, y, 305);           y += 26;
-    Label(p, "Disp.LargeText", 10, y + 3, 145); Edit(p, IDC_LARGETEXT, 160, y, 305);       y += 26;
-    Label(p, "Disp.SmallText", 10, y + 3, 145); Edit(p, IDC_SMALLTEXT, 160, y, 305);       y += 26;
-    Check(p, IDC_SMALLICON, "Disp.SmallIcon", 10, y, 455);                                  y += 24;
+    Label(p, "Disp.Details", 10, y + 3, 145);   Edit(p, IDC_DETAILS, 160, y, 280);         y += 26;
+    Label(p, "Disp.State", 10, y + 3, 145);     Edit(p, IDC_STATE, 160, y, 280);           y += 26;
+    Label(p, "Disp.LargeText", 10, y + 3, 145); Edit(p, IDC_LARGETEXT, 160, y, 280);       y += 26;
+    Label(p, "Disp.SmallText", 10, y + 3, 145); Edit(p, IDC_SMALLTEXT, 160, y, 280);       y += 26;
+    Check(p, IDC_SMALLICON, "Disp.SmallIcon", 10, y, 262);
+    Check(p, IDC_ADVANCED, "Disp.Advanced", 275, y, 165);                                   y += 24;
     Label(p, "Disp.BarLength", 10, y + 3, 150); Edit(p, IDC_BARLEN, 165, y, 45);
-    Label(p, "Disp.Refresh", 230, y + 3, 170);  Edit(p, IDC_REFRESH, 405, y, 60);           y += 26;
-    Label(p, "Disp.Rotate", 10, y + 3, 390);    Edit(p, IDC_ROTATE, 405, y, 60);            y += 26;
-    Label(p, "Disp.Placeholders", 10, y, 455, 46);                                          y += 47;
-    Check(p, IDC_TITLELINK, "Disp.TitleLink", 10, y, 455);                                  y += 22;
+    Label(p, "Disp.Refresh", 220, y + 3, 155);  Edit(p, IDC_REFRESH, 380, y, 60);           y += 26;
+    Label(p, "Disp.Rotate", 10, y + 3, 365);    Edit(p, IDC_ROTATE, 380, y, 60);            y += 26;
+    Label(p, "Disp.Placeholders", 10, y, 430, 46, IDC_PLACEHOLDERS);                                          y += 47;
+    // links: the clickable title and the two buttons under the presence (placeholders work in labels and links)
+    Check(p, IDC_TITLELINK, "Disp.TitleLink", 10, y, 430);                                  y += 22;
     Check(p, IDC_TITLELINKCUSTOM, "Disp.OwnLink", 28, y + 1, 127);
-    Edit(p, IDC_TITLELINKURL, 160, y, 305);                                                 y += 26;
+    Edit(p, IDC_TITLELINKURL, 160, y, 280);                                                 y += 28;
+    Check(p, IDC_BUTTONS, "Gen.Buttons", 10, y, 430);                                       y += 24;
+    Label(p, "Gen.Button1", 28, y + 3, 67); Edit(p, IDC_BTN1LABEL, 100, y, 120); Edit(p, IDC_BTN1URL, 226, y, 214); y += 26;
+    Label(p, "Gen.Button2", 28, y + 3, 67); Edit(p, IDC_BTN2LABEL, 100, y, 120); Edit(p, IDC_BTN2URL, 226, y, 214); y += 30;
+    EndScroll();
     // live preview: what Discord will show (drawn in OnDraw)
-    Paint(p, IDC_PREVIEW, 10, y, kPreviewWidth, kPreviewHeight);
+    Paint(page, IDC_PREVIEW, 10, p == page ? y : boxH + 4, kPreviewWidth, kPreviewHeight);
+}
+
+void SettingsPage::BuildTemplates(IAIMPUIWinControl* page) {
+    // the settings scroll (the automatic presets are below the fold), the live preview stays at the bottom
+    const int boxH = 420 - kPreviewHeight - 6;
+    IAIMPUIWinControl* p = BeginScroll(page, IDC_TPLSCROLL, boxH);
+    int y = 8;
+    // presets: list (items: FillPresets), name, save, delete
+    Label(p, "Tpl.Preset", 10, y + 3, 55);
+    if (IAIMPUIControl* c = Create(p, IDC_PRESET, IID_IAIMPUIComboBox, true)) {
+        kinds_[IDC_PRESET] = kCombo;
+        c->SetValueAsInt32(AIMPUI_COMBOBOX_PROPID_STYLE, AIMPUI_COMBOBOX_STYLE_LIST);
+        Place(c, 68, y, 130, kRowH);
+    }
+    Edit(p, IDC_PRESETNAME, 204, y, 76);
+    Button(p, IDC_PRESETSAVE, "Tpl.Save", 285, y - 1, 78);
+    Button(p, IDC_PRESETDELETE, "Tpl.Delete", 367, y - 1, 73);                            y += 28;
+    // which texts the fields show: normal, while paused, for radio streams
+    Label(p, "Tpl.For", 10, y + 3, 145);
+    Combo(p, IDC_TPLSET, {"Tpl.SetPlay", "Tpl.SetPaused", "Tpl.SetStream"}, 160, y, 130);
+    Label(p, nullptr, 298, y - 4, 142, 40, IDC_TPLSETHINT);                                 y += 38;
+    Label(p, "Disp.Details", 10, y + 3, 145);   Memo(p, IDC_TPLDETAILS, 160, y, 280, 46, true);   y += 50;
+    Label(p, "Disp.State", 10, y + 3, 145);     Memo(p, IDC_TPLSTATE, 160, y, 280, 34, true);     y += 38;
+    Label(p, "Disp.LargeText", 10, y + 3, 145); Memo(p, IDC_TPLLARGETEXT, 160, y, 280, 34, true); y += 38;
+    Label(p, "Disp.SmallText", 10, y + 3, 145); Memo(p, IDC_TPLSMALLTEXT, 160, y, 280, 34, true); y += 38;
+    Memo(p, IDC_TPLLIST, 10, y, 430, 44);                                                   y += 52;
+    SetText(IDC_TPLLIST, PlaceholderList());
+    // automatic presets: "if <field> <contains / equals> <text> -> preset", the first matching rule wins
+    Check(p, IDC_AUTOPRESETS, "Tpl.Auto", 10, y, 430);                                      y += 22;
+    Label(p, "Tpl.AutoHint", 10, y, 430, 30, IDC_AUTOHINT);                                 y += 32;
+    Label(p, nullptr, 10, y, 430, 18, IDC_RULESTATUS);                                      y += 22;   // rule in use
+    for (int i = 0; i < Config::kRules; ++i) {
+        Label(p, nullptr, 10, y + 3, 18, 18, 0);
+        if (!anonymous_.empty()) aimp::SetPropString(core_, anonymous_.back(), AIMPUI_LABEL_PROPID_TEXT, std::to_wstring(i + 1) + L".");
+        Combo(p, IDC_RULEFIELD + i, {"Tpl.RulePlaylist", "Tpl.RuleGenre", "Tpl.RuleArtist", "Tpl.RuleAlbum",
+                                     "Tpl.RuleTitle", "Tpl.RulePath", "Tpl.RuleComment", "Tpl.RuleCodec",
+                                     "Tpl.RuleStream"}, 30, y, 104);
+        Combo(p, IDC_RULEOP + i, {"Tpl.RuleContains", "Tpl.RuleEquals"}, 138, y, 84);
+        Edit(p, IDC_RULETEXT + i, 226, y, 112);
+        if (IAIMPUIControl* c = Create(p, IDC_RULEPRESET + i, IID_IAIMPUIComboBox, true)) {   // items: FillRulePresets
+            kinds_[IDC_RULEPRESET + i] = kCombo;
+            c->SetValueAsInt32(AIMPUI_COMBOBOX_PROPID_STYLE, AIMPUI_COMBOBOX_STYLE_LIST);
+            Place(c, 342, y, 98, kRowH);
+        }
+        y += 26;
+    }
+    Label(p, nullptr, 10, y, 18, 18, 0);   // AIMP for Linux scrolls only to the top of the last control: a spacer
+    if (!anonymous_.empty()) aimp::SetPropString(core_, anonymous_.back(), AIMPUI_LABEL_PROPID_TEXT, L" ");
+    EndScroll();
+    Paint(page, IDC_TPLPREVIEW, 10, p == page ? y + 24 : boxH + 4, kPreviewWidth, kPreviewHeight);
 }
 
 void SettingsPage::BuildCover(IAIMPUIWinControl* p) {
@@ -754,14 +900,85 @@ void SettingsPage::UpdateEnabled() {
     const bool link = GetCheck(IDC_TITLELINK);
     SetEnabled(IDC_TITLELINKCUSTOM, link);
     SetEnabled(IDC_TITLELINKURL, link && GetCheck(IDC_TITLELINKCUSTOM));
+    for (int id : {IDC_BTN1LABEL, IDC_BTN1URL, IDC_BTN2LABEL, IDC_BTN2URL}) SetEnabled(id, GetCheck(IDC_BUTTONS));
     const bool upd = GetCheck(IDC_UPDCHECK);
     SetEnabled(IDC_UPDFREQ, upd);
     SetEnabled(IDC_UPDAUTO, upd);
+    // advanced placeholders: the texts are edited in the multi-line fields of the Templates tab
+    const bool adv = GetCheck(IDC_ADVANCED);
+    if (templatesSheet_) templatesSheet_->SetValueAsInt32(AIMPUI_TABSHEET_PROPID_VISIBLE, adv ? 1 : 0);
+    for (const auto& f : kTemplateFields) SetEnabled(f[0], !adv);
+    const bool rules = GetCheck(IDC_AUTOPRESETS);
+    for (int i = 0; i < Config::kRules; ++i) {
+        for (int id : {IDC_RULEFIELD + i, IDC_RULEOP + i, IDC_RULEPRESET + i}) SetEnabled(id, rules);
+        const bool stream = GetSel(IDC_RULEFIELD + i) == Config::kRuleStream;   // needs no text
+        SetEnabled(IDC_RULEOP + i, rules && !stream);
+        SetEnabled(IDC_RULETEXT + i, rules && !stream);
+    }
+    SetText(IDC_PLACEHOLDERS, T(adv ? "Disp.PlaceholdersAdvanced" : "Disp.Placeholders"));
 }
 
 void SettingsPage::ActionInfo(const char* key) {
     SetText(IDC_ACTIONINFO, key ? T(key) : std::wstring());
     actionUntil_ = key ? util::TickMs() + 15000 : 0;
+}
+
+// The mouse wheel over a list (combo box) in a scroll box would pick another item while the page scrolls past it, so
+// an unfocused list passes the wheel on to the page. AIMP 4 does not scroll a scroll box itself at all (its wheel
+// handler, see BeginScroll).
+bool SettingsPage::OnWheel(int id, int delta) {
+    if (scrolls_.count(id)) {
+        ScrollStep(id, delta);
+        return false;
+    }
+    auto item = items_.find(id);
+    auto kind = kinds_.find(id);
+    if (item == items_.end() || kind == kinds_.end() || kind->second != kCombo) return false;
+    IAIMPUIControl* c = item->second;
+    int focused = 0;
+    if (SUCCEEDED(c->GetValueAsInt32(AIMPUI_WINCONTROL_PROPID_FOCUSED, &focused)) && focused) return false;   // picks
+    for (auto& [box, area] : scrolls_)
+        for (const ScrollRow& r : area.rows)
+            if (r.control == c) {
+                ScrollStep(box, delta);
+                return true;
+            }
+    return false;
+}
+
+// The box only offers MakeVisible, so the step makes the row at the new top (up) or bottom edge (down) visible. The
+// current position comes from the controls (the user may have dragged the scroll bar).
+bool SettingsPage::ScrollStep(int id, int delta) {
+    auto box = items_.find(id);
+    auto area = scrolls_.find(id);
+    if (box == items_.end() || area == scrolls_.end() || delta == 0 || area->second.rows.empty()) return false;
+    ScrollArea& a = area->second;
+    TAIMPUIControlPlacement pl = {};
+    if (a.panel && SUCCEEDED(a.panel->GetPlacement(&pl)))
+        a.top = -pl.Bounds.top;
+    else if (!a.panel && SUCCEEDED(a.rows.front().control->GetPlacement(&pl)))
+        a.top = a.rows.front().top - pl.Bounds.top;
+    // the farthest row that is hidden now and fully visible after a step of about two rows; else the next hidden row
+    const bool down = delta < 0;
+    const int step = down ? a.top + a.height + 52 : a.top - 52;
+    const ScrollRow* target = nullptr;
+    const ScrollRow* next = nullptr;
+    for (const ScrollRow& r : a.rows) {
+        if (r.control == a.panel) continue;
+        const bool hidden = down ? r.bottom > a.top + a.height : r.top < a.top;
+        if (!hidden) continue;
+        if (down ? r.bottom <= step : r.top >= step) {
+            if (!target || (down ? r.bottom > target->bottom : r.top < target->top)) target = &r;
+        } else if (!next || (down ? r.bottom < next->bottom : r.top > next->top)) {
+            next = &r;
+        }
+    }
+    if (!target) target = next;
+    if (!target) return false;
+    // MakeVisible scrolls just far enough: the row ends at the bottom / starts at the top
+    a.top = down ? target->bottom - a.height : target->top;
+    static_cast<IAIMPUIScrollBox*>(box->second)->MakeVisible(target->control);
+    return true;
 }
 
 void SettingsPage::OnControlChanged(int id) {
@@ -785,12 +1002,41 @@ void SettingsPage::OnControlChanged(int id) {
         case IDC_IMPORT:   ImportSettings(); return;
         case IDC_CHECKNOW: update::Check(); return;
         case IDC_INSTALL:  update::Install(); return;
+        case IDC_PRESETSAVE:   SavePresetSlot(); return;     // presets are stored at once (like an export)
+        case IDC_PRESETDELETE: DeletePresetSlot(); return;
         default: break;
     }
-    if (loading_) return;
+    if (loading_ || id == IDC_PRESETNAME || id == IDC_DISPSCROLL || id == IDC_TPLSCROLL) return;   // (the name only matters for "Save")
+    if (id == IDC_TPLSET) {   // only another view of the texts
+        ShowTemplateSet(std::max(0, std::min(2, GetSel(IDC_TPLSET))));
+        previewDirty_ = true;
+        if (IAIMPUIControl* c = Item(IDC_TPLPREVIEW)) c->Invalidate();
+        return;
+    }
+    if (id == IDC_PRESET) {
+        const int slot = GetSel(IDC_PRESET);
+        if (slot < 0 || slot >= Config::kPresets || config::Get().presets[slot].name.empty()) {
+            SetText(IDC_PRESETNAME, std::wstring());   // a free slot: the next "Save" fills it
+            return;
+        }
+        LoadPresetSlot(slot);
+    }
+    if (id == IDC_ADVANCED && GetCheck(IDC_ADVANCED)) {   // switched on: the multi-line fields start with the texts
+        for (int f = 0; f < 4; ++f) tpl_[0][f] = GetText(kTemplateFields[f][0]);
+        ShowTemplateSet(tplSet_);
+    }
+    for (int f = 0; f < 4; ++f) {   // multi-line field changed: stored as one line, the Display tab shows it
+        if (id != kTemplateFields[f][1]) continue;
+        tpl_[tplSet_][f] = tmpl::Flatten(GetText(id));
+        if (tplSet_ != 0) continue;
+        loading_ = true;
+        SetText(kTemplateFields[f][0], tpl_[0][f]);
+        loading_ = false;
+    }
     UpdateEnabled();
     previewDirty_ = true;
     if (IAIMPUIControl* c = Item(IDC_PREVIEW)) c->Invalidate();   // the live preview follows every change
+    if (IAIMPUIControl* c = Item(IDC_TPLPREVIEW)) c->Invalidate();
     if (onModified_) onModified_();                              // enables AIMP's "Apply" button
 }
 
@@ -808,11 +1054,30 @@ void SettingsPage::Load(const Config* from) {
     SetText(IDC_PAUSEDMIN, std::to_wstring(c.clearAfterPaused));
     SetCheck(IDC_HIDESTREAMS, c.hideStreams);
     SetText(IDC_EXCLUDE, c.excludePaths);
+    SetCheck(IDC_BUTTONS, c.buttons);
+    SetText(IDC_BTN1LABEL, c.button1Label);
+    SetText(IDC_BTN1URL, c.button1Url);
+    SetText(IDC_BTN2LABEL, c.button2Label);
+    SetText(IDC_BTN2URL, c.button2Url);
 
     SetText(IDC_DETAILS, c.details);
     SetText(IDC_STATE, c.state);
     SetText(IDC_LARGETEXT, c.largeText);
     SetText(IDC_SMALLTEXT, c.smallText);
+    for (int set = 0; set < 3; ++set)
+        for (int f = 0; f < 4; ++f) tpl_[set][f] = TemplateText(c, set, f);
+    SetSel(IDC_TPLSET, 0);
+    ShowTemplateSet(0);
+    loadedPreset_ = 0;
+    FillPresets(std::max(0, config::Get().activePreset - 1));   // presets are no page setting: always the stored ones
+    SetCheck(IDC_ADVANCED, c.advancedTemplates);
+    SetCheck(IDC_AUTOPRESETS, c.autoPresets);
+    for (int i = 0; i < Config::kRules; ++i) {
+        SetSel(IDC_RULEFIELD + i, c.rules[i].field);
+        SetSel(IDC_RULEOP + i, c.rules[i].equals ? 1 : 0);
+        SetText(IDC_RULETEXT + i, c.rules[i].text);
+        SetSel(IDC_RULEPRESET + i, c.rules[i].preset);
+    }
     SetCheck(IDC_SMALLICON, c.showSmallIcon);
     SetText(IDC_BARLEN, std::to_wstring(c.barLength));
     SetText(IDC_REFRESH, std::to_wstring(c.refreshSeconds));
@@ -864,11 +1129,28 @@ void SettingsPage::Collect(Config& c) const {
     c.clearAfterPaused = std::max(0, GetInt(IDC_PAUSEDMIN, 0));
     c.hideStreams      = GetCheck(IDC_HIDESTREAMS);
     c.excludePaths     = GetText(IDC_EXCLUDE);
+    c.buttons          = GetCheck(IDC_BUTTONS);
+    c.button1Label     = GetText(IDC_BTN1LABEL);
+    c.button1Url       = util::Trim(GetText(IDC_BTN1URL));
+    c.button2Label     = GetText(IDC_BTN2LABEL);
+    c.button2Url       = util::Trim(GetText(IDC_BTN2URL));
 
-    c.details         = GetText(IDC_DETAILS);
-    c.state           = GetText(IDC_STATE);
-    c.largeText       = GetText(IDC_LARGETEXT);
-    c.smallText       = GetText(IDC_SMALLTEXT);
+    c.advancedTemplates = GetCheck(IDC_ADVANCED);
+    for (int f = 0; f < 4; ++f)   // advanced: the Templates tab's texts, else the Display tab's edits
+        TemplateText(c, 0, f) = c.advancedTemplates ? tpl_[0][f] : GetText(kTemplateFields[f][0]);
+    for (int set = 1; set < 3; ++set)
+        for (int f = 0; f < 4; ++f) TemplateText(c, set, f) = tpl_[set][f];
+    if (loadedPreset_) c.activePreset = loadedPreset_;
+    if (Item(IDC_AUTOPRESETS)) {
+        c.autoPresets = GetCheck(IDC_AUTOPRESETS);
+        for (int i = 0; i < Config::kRules; ++i) {
+            Config::PresetRule& r = c.rules[i];
+            r.field = std::max(0, std::min(Config::kRuleFields - 1, GetSel(IDC_RULEFIELD + i)));
+            r.equals = GetSel(IDC_RULEOP + i) == 1;
+            r.text = util::Trim(GetText(IDC_RULETEXT + i));
+            r.preset = std::max(0, std::min(Config::kPresets, GetSel(IDC_RULEPRESET + i)));
+        }
+    }
     c.showSmallIcon   = GetCheck(IDC_SMALLICON);
     c.barLength       = std::max(4, std::min(30, GetInt(IDC_BARLEN, 12)));
     c.refreshSeconds  = std::max(5, GetInt(IDC_REFRESH, 15));
@@ -910,6 +1192,7 @@ void SettingsPage::Save() {
     if (!form_) return;
     const std::wstring oldLanguage = config::Get().language;
     config::Update([this](Config& c) { Collect(c); });
+    loadedPreset_ = 0;
     const Config c = config::Get();
     Worker().Refresh();
     jobs::FetchDiscordAssets(c.clientId);
@@ -939,6 +1222,9 @@ void SettingsPage::Localize() {
     }
     const int lang = GetSel(IDC_LANG);
     FillLanguages(lang > 0 && lang < (int)langCodes_.size() ? langCodes_[lang] : std::wstring());
+    FillPresets(GetSel(IDC_PRESET));
+    SetText(IDC_TPLLIST, PlaceholderList());
+    SetText(IDC_TPLSETHINT, kSetHints[tplSet_] ? T(kSetHints[tplSet_]) : std::wstring());
     SetText(IDC_ABOUTVERSION, util::Subst(T("About.Version"), AIMP_DISCORD_RPC_VERSION_W, Platform()));
     SetText(IDC_CHANGELOG, ChangelogText());
     for (int id : {IDC_CACHEINFO, IDC_ACTIONINFO, IDC_IOINFO}) SetText(id, std::wstring());
@@ -947,7 +1233,117 @@ void SettingsPage::Localize() {
     shownCoverText_.clear();
     shownUpdate_.clear();
     previewDirty_ = true;
+    UpdateEnabled();   // placeholder list of the Display tab (normal / advanced)
     Refresh();
+}
+
+// ---- Templates tab: sets of texts and presets
+
+void SettingsPage::ShowTemplateSet(int set) {
+    tplSet_ = set;
+    const bool was = loading_;
+    loading_ = true;
+    for (int f = 0; f < 4; ++f) SetText(kTemplateFields[f][1], tmpl::Pretty(tpl_[set][f]));   // nested functions on lines of their own
+    SetText(IDC_TPLSETHINT, kSetHints[set] ? T(kSetHints[set]) : std::wstring());
+    loading_ = was;
+}
+
+void SettingsPage::FillPresets(int select) {
+    IAIMPUIControl* c = Item(IDC_PRESET);
+    if (!c) return;
+    const Config cfg = config::Get();
+    const bool was = loading_;
+    loading_ = true;
+    IAIMPUIComboBox* cb = static_cast<IAIMPUIComboBox*>(c);
+    cb->Clear();
+    for (int i = 0; i < Config::kPresets; ++i) {
+        const std::wstring& name = cfg.presets[i].name;
+        const std::wstring item = std::to_wstring(i + 1) + L": " + (name.empty() ? T("Tpl.Free") : name);
+        if (IAIMPString* s = aimp::MakeString(core_, item)) {
+            cb->Add(s, 0);
+            s->Release();
+        }
+    }
+    if (select < 0 || select >= Config::kPresets) select = -1;
+    SetSel(IDC_PRESET, select);
+    SetText(IDC_PRESETNAME, select >= 0 ? cfg.presets[select].name : std::wstring());
+    FillRulePresets();
+    loading_ = was;
+}
+
+void SettingsPage::FillRulePresets() {
+    const Config cfg = config::Get();
+    const bool was = loading_;
+    loading_ = true;
+    for (int i = 0; i < Config::kRules; ++i) {
+        IAIMPUIControl* c = Item(IDC_RULEPRESET + i);
+        if (!c) continue;
+        const int sel = GetSel(IDC_RULEPRESET + i);
+        IAIMPUIComboBox* cb = static_cast<IAIMPUIComboBox*>(c);
+        cb->Clear();
+        for (int k = 0; k <= Config::kPresets; ++k) {
+            const std::wstring item = k == 0 ? T("Tpl.RuleOff")
+                : cfg.presets[k - 1].name.empty() ? std::to_wstring(k)   // a free place: just its number (narrow list)
+                : std::to_wstring(k) + L": " + cfg.presets[k - 1].name;
+            if (IAIMPString* str = aimp::MakeString(core_, item)) {
+                cb->Add(str, 0);
+                str->Release();
+            }
+        }
+        SetSel(IDC_RULEPRESET + i, std::max(0, sel));
+    }
+    loading_ = was;
+}
+
+int SettingsPage::PresetSlot() const {
+    const int sel = GetSel(IDC_PRESET);
+    if (sel >= 0 && sel < Config::kPresets) return sel;
+    const Config c = config::Get();
+    for (int i = 0; i < Config::kPresets; ++i)
+        if (c.presets[i].name.empty()) return i;
+    return -1;   // all slots in use and none selected
+}
+
+void SettingsPage::SavePresetSlot() {
+    const int slot = PresetSlot();
+    if (slot < 0) return;
+    Config page = config::Get();
+    Collect(page);
+    for (int f = 0; f < 4; ++f) TemplateText(page, 0, f) = tpl_[0][f];   // the Templates tab's texts
+    const std::wstring name = GetText(IDC_PRESETNAME);
+    config::Update([&](Config& c) {
+        SavePreset(page, slot, name);
+        c.presets[slot] = page.presets[slot];
+        c.activePreset = slot + 1;
+    });
+    FillPresets(slot);
+    PresetsChanged();
+}
+
+void SettingsPage::DeletePresetSlot() {
+    const int slot = GetSel(IDC_PRESET);
+    if (slot < 0 || slot >= Config::kPresets) return;
+    config::Update([&](Config& c) {
+        c.presets[slot] = Config::Preset();
+        if (c.activePreset == slot + 1) c.activePreset = 0;
+    });
+    if (loadedPreset_ == slot + 1) loadedPreset_ = 0;
+    FillPresets(slot);
+    PresetsChanged();
+}
+
+void SettingsPage::LoadPresetSlot(int index) {
+    Config c = config::Get();
+    if (!LoadPreset(c, index)) return;
+    for (int set = 0; set < 3; ++set)
+        for (int f = 0; f < 4; ++f) tpl_[set][f] = TemplateText(c, set, f);
+    loading_ = true;
+    for (int f = 0; f < 4; ++f) SetText(kTemplateFields[f][0], tpl_[0][f]);
+    SetCheck(IDC_ADVANCED, true);
+    SetText(IDC_PRESETNAME, c.presets[index].name);
+    loading_ = false;
+    ShowTemplateSet(tplSet_);
+    loadedPreset_ = index + 1;
 }
 
 // ---- export / import (Advanced tab)
@@ -1067,7 +1463,7 @@ void SettingsPage::Refresh() {
         previewDirty_ = true;
     }
     const int tab = ActiveTab();
-    const bool display = tab == kTabDisplay || tab < 0;
+    const bool display = tab == kTabDisplay || tab == kTabTemplates || tab < 0;
     bool rotating = false;   // texts with variants switch while the page is open (also for the example track)
     if (display && s.state != PlayState::Playing) {
         Config shown = config::Get();
@@ -1077,6 +1473,7 @@ void SettingsPage::Refresh() {
     if (previewDirty_ || ((s.state == PlayState::Playing || rotating) && display)) {
         previewDirty_ = false;
         if (IAIMPUIControl* pb = Item(IDC_PREVIEW)) pb->Invalidate();
+        if (IAIMPUIControl* pb = Item(IDC_TPLPREVIEW)) pb->Invalidate();
     }
 }
 
@@ -1195,11 +1592,12 @@ void SettingsPage::RefreshLog() {
 
 // ---- live preview (Display tab)
 
-void SettingsPage::BuildPreview() {
+void SettingsPage::BuildPreview(bool templatesTab) {
     Config c = config::Get();
     Collect(c);   // what the page shows, also before "Apply"
     config::Resolve(c);
     Snapshot s = Worker().LastSnapshot();
+    const int set = templatesTab && c.advancedTemplates ? tplSet_ : 0;   // the set being edited is previewed
     const bool example = s.state == PlayState::Stopped || (s.track.title.empty() && s.track.fileName.empty());
     if (example) {   // nothing is playing: show an example track
         s = Snapshot();
@@ -1214,6 +1612,42 @@ void SettingsPage::BuildPreview() {
         s.track.trackNumber = L"11";
         s.track.fileName = L"Queen - Bohemian Rhapsody.flac";
         s.track.playlist = L"Favourites";
+        s.track.next = L"Queen - Don't Stop Me Now";
+        s.track.extra = {{L"composer", L"Freddie Mercury"}, {L"playcount", L"7"}, {L"filesize", L"13.52 MB"},
+                         {L"filesizebytes", L"14176256"}, {L"bitrate", L"1411"}, {L"samplerate", L"44100"},
+                         {L"channels", L"2"}, {L"bitdepth", L"16"}, {L"codec", L"FLAC"}, {L"disc", L"1"},
+                         {L"tracktotal", L"12"}};
+    }
+    if (templatesTab) {   // the rule that picks a preset for this track; the preview shows the texts being edited
+        const int rule = c.advancedTemplates && c.autoPresets ? MatchingRule(c, s) : -1;
+        const bool manual = !example && s.trackId && s.trackId == c.manualTrack;
+        const std::wstring line = !c.autoPresets ? std::wstring()
+            : manual   ? T("Tpl.RuleManual")
+            : rule < 0 ? T(example ? "Tpl.RuleNoneExample" : "Tpl.RuleNone")
+                       : util::Subst(T(example ? "Tpl.RuleActiveExample" : "Tpl.RuleActive"), std::to_wstring(rule + 1),
+                                     c.presets[c.rules[rule].preset - 1].name);
+        if (line != shownRule_) {
+            shownRule_ = line;
+            SetText(IDC_RULESTATUS, line);
+        }
+        c.autoPresets = false;
+    }
+    if (set == 1) {   // as if paused (and shown while paused)
+        s.state = PlayState::Paused;
+        c.pausedBehavior = 0;
+        c.clearAfterPaused = 0;
+    } else if (set == 2 && !util::IsUrl(s.track.fileName)) {   // as if a radio stream played
+        if (example) {
+            s.track = TrackInfo();
+            s.track.artist = L"Queen";
+            s.track.title = L"Don't Stop Me Now";
+            s.track.album = L"Radio Example FM";
+            s.track.extra = {{L"bitrate", L"128"}, {L"samplerate", L"44100"}, {L"codec", L"MP3"}};
+        }
+        s.track.fileName = L"https://stream.example.com/radio";
+        s.position = 83;
+        s.duration = 0;
+        c.hideStreams = false;
     }
     const auto pausedFor = s.state == PlayState::Paused ? std::chrono::steady_clock::now() - s.stamp
                                                         : std::chrono::steady_clock::duration::zero();
@@ -1245,6 +1679,8 @@ void SettingsPage::BuildPreview() {
     } else {
         d.linkTip = T("Prev.NoLink");
     }
+    for (int i = 0; i < 2; ++i) d.buttons[i] = util::FromUtf8(t.buttonLabel[i]);
+    if (!d.buttons[0].empty()) d.buttonsTip = T("Prev.ButtonsTip");   // Discord does not show them to oneself
     d.progress = c.showTimestamps && t.playing && c.activityType == 2;
     if (c.showTimestamps && t.playing && c.activityType == 0)
         d.elapsed = util::Subst(T("Prev.Elapsed"), util::FormatTime(t.pos));
@@ -1267,6 +1703,6 @@ void SettingsPage::OnDraw(int id, HCANVAS canvas, const RECT& r) {
         if (it != images_.end() && it->second) DrawRoundedImage(canvas, r, it->second, 10);
         return;
     }
-    BuildPreview();
+    BuildPreview(id == IDC_TPLPREVIEW);
     DrawPreview(canvas, r, preview_);
 }

@@ -7,33 +7,15 @@
 #include <vector>
 
 #include "i18n.h"
+#include "template.h"
 #include "util.h"
 #include "version.h"
 
 namespace {
 
-using Vars = std::map<std::wstring, std::wstring>;
+using Vars = tmpl::Vars;
+using tmpl::Expand;
 using clock_t_ = std::chrono::steady_clock;
-
-// Replaces %name% placeholders. Unknown placeholders stay untouched. With urlEncode every value is percent-encoded.
-std::wstring Expand(const std::wstring& tmpl, const Vars& vars, bool urlEncode) {
-    std::wstring out;
-    for (size_t i = 0; i < tmpl.size();) {
-        if (tmpl[i] == L'%') {
-            size_t j = tmpl.find(L'%', i + 1);
-            if (j != std::wstring::npos) {
-                auto it = vars.find(util::Lower(tmpl.substr(i + 1, j - i - 1)));
-                if (it != vars.end()) {
-                    out += urlEncode ? util::FromUtf8(util::UrlEncode(util::ToUtf8(it->second))) : it->second;
-                    i = j + 1;
-                    continue;
-                }
-            }
-        }
-        out += tmpl[i++];
-    }
-    return out;
-}
 
 std::wstring MakeBar(double fraction, int length) {
     fraction = std::min(1.0, std::max(0.0, fraction));
@@ -58,37 +40,88 @@ bool IsHttpUrl(const std::wstring& u) {
     return l.rfind(L"http://", 0) == 0 || l.rfind(L"https://", 0) == 0;
 }
 
+// every text that can be shown: the name, the four texts and (advanced) those for pause / streams and the
+// presets of the automatic rules
+std::vector<const std::wstring*> AllTexts(const Config& c) {
+    std::vector<const std::wstring*> v = {&c.activityName, &c.details, &c.state, &c.largeText, &c.smallText};
+    if (c.advancedTemplates)
+        for (int i = 0; i < 4; ++i) {
+            v.push_back(&c.pausedTexts[i]);
+            v.push_back(&c.streamTexts[i]);
+        }
+    if (c.advancedTemplates && c.autoPresets)   // the presets the rules can pick
+        for (const auto& r : c.rules)
+            if (r.preset > 0)
+                for (const std::wstring& t : c.presets[r.preset - 1].texts) v.push_back(&t);
+    return v;
+}
+
+}  // namespace
+
+bool UsesPlaceholder(const Config& c, const wchar_t* name) {
+    for (const std::wstring* s : AllTexts(c))
+        if (tmpl::Uses(*s, {name}, c.advancedTemplates)) return true;
+    return false;
+}
+
+namespace {
+
 bool NeedsPeriodicRefresh(const Config& c) {
-    for (const std::wstring* s : {&c.activityName, &c.details, &c.state, &c.largeText, &c.smallText}) {
-        std::wstring l = util::Lower(*s);
-        if (l.find(L"%pos%") != std::wstring::npos || l.find(L"%bar%") != std::wstring::npos ||
-            l.find(L"%percent%") != std::wstring::npos)
-            return true;
-    }
+    for (const std::wstring* s : AllTexts(c))
+        if (tmpl::Uses(*s, {L"pos", L"bar", L"percent"}, c.advancedTemplates)) return true;
     return false;
 }
 
 std::string Quote(const std::string& s) { return "\"" + util::JsonEscape(s) + "\""; }
 
 // "%artist% || %title%": the variant for this step (texts without "||" stay as they are)
-std::wstring Variant(const std::wstring& tmpl, int step) {
-    if (tmpl.find(L"||") == std::wstring::npos) return tmpl;
-    std::vector<std::wstring> parts;
-    for (size_t from = 0;;) {
-        const size_t at = tmpl.find(L"||", from);
-        parts.push_back(util::Trim(tmpl.substr(from, at == std::wstring::npos ? std::wstring::npos : at - from)));
-        if (at == std::wstring::npos) break;
-        from = at + 2;
-    }
+std::wstring Variant(const std::wstring& t, int step, bool advanced) {
+    const std::vector<std::wstring> parts = tmpl::Variants(t, advanced);
     return parts[(size_t)(step < 0 ? 0 : step) % parts.size()];
 }
 
 }  // namespace
 
 bool HasVariants(const Config& c) {
-    for (const std::wstring* s : {&c.activityName, &c.details, &c.state, &c.largeText, &c.smallText})
-        if (s->find(L"||") != std::wstring::npos) return true;
+    for (const std::wstring* s : AllTexts(c))
+        if (tmpl::Variants(*s, c.advancedTemplates).size() > 1) return true;
     return false;
+}
+
+int MatchingRule(const Config& c, const Snapshot& s) {
+    if (!c.advancedTemplates || !c.autoPresets || (s.trackId && s.trackId == c.manualTrack)) return -1;
+    auto extra = [&](const wchar_t* n) {
+        auto it = s.track.extra.find(n);
+        return it == s.track.extra.end() ? std::wstring() : it->second;
+    };
+    for (int i = 0; i < Config::kRules; ++i) {
+        const Config::PresetRule& r = c.rules[i];
+        if (r.preset < 1 || c.presets[r.preset - 1].name.empty()) continue;   // off, or the preset was deleted
+        if (r.field == Config::kRuleStream) {
+            if (util::IsUrl(s.track.fileName)) return i;
+            continue;
+        }
+        std::wstring value;
+        switch (r.field) {
+            case Config::kRulePlaylist: value = s.track.playlist; break;
+            case Config::kRuleGenre:    value = s.track.genre; break;
+            case Config::kRuleArtist:   value = s.track.artist; break;
+            case Config::kRuleAlbum:    value = s.track.album; break;
+            case Config::kRuleTitle:    value = s.track.title; break;
+            case Config::kRulePath:     value = s.track.fileName; break;
+            case Config::kRuleComment:  value = extra(L"comment"); break;
+            case Config::kRuleCodec:    value = extra(L"codec"); break;
+            default: break;
+        }
+        if (!r.equals) {
+            if (util::MatchesAny(value, r.text)) return i;
+            continue;
+        }
+        const std::wstring v = util::Lower(util::Trim(value));
+        for (const auto& alt : util::Split(r.text, L';'))
+            if (!util::Trim(alt).empty() && util::Lower(util::Trim(alt)) == v) return i;
+    }
+    return -1;
 }
 
 bool PresenceStatus::operator==(const PresenceStatus& o) const {
@@ -128,6 +161,7 @@ ActivityTexts ComputeTexts(const Config& c, const Snapshot& s, clock_t_::duratio
     v[L"year"]        = s.track.year;
     v[L"track"]       = s.track.trackNumber;
     v[L"playlist"]    = s.track.playlist;
+    v[L"next"]        = s.track.next;
     v[L"filename"]    = util::FileNameNoExt(s.track.fileName);
     v[L"ext"]         = util::FileExt(s.track.fileName);
     v[L"pos"]         = util::FormatTime(pos);
@@ -135,12 +169,37 @@ ActivityTexts ComputeTexts(const Config& c, const Snapshot& s, clock_t_::duratio
     v[L"percent"]     = s.duration > 0 ? std::to_wstring((int)(pos / s.duration * 100.0)) : L"0";
     v[L"bar"]         = MakeBar(s.duration > 0 ? pos / s.duration : 0.0, c.barLength);
     v[L"status"]      = i18n::T(playing ? "Status.Playing" : "Status.Paused");
+    if (c.advancedTemplates) {
+        static const wchar_t* const kExtra[] = {L"comment", L"composer", L"lyricist", L"conductor", L"copyright", L"mood",
+            L"codec", L"disc", L"disctotal", L"tracktotal", L"isrc", L"key", L"bitrate", L"samplerate", L"channels",
+            L"bitdepth", L"bpm", L"rating", L"filesize", L"filesizebytes", L"playcount"};
+        for (const wchar_t* n : kExtra) {   // known even when AIMP has no value (then empty, for %IF)
+            auto it = s.track.extra.find(n);
+            v[n] = it == s.track.extra.end() ? std::wstring() : it->second;
+        }
+    }
+    auto text = [&](const std::wstring& t) {
+        const std::wstring variant = Variant(t, rotateStep, c.advancedTemplates);
+        return c.advancedTemplates ? tmpl::ExpandAdvanced(variant, v) : Expand(variant, v, false);
+    };
 
-    t.name      = Field(Expand(Variant(c.activityName, rotateStep), v, false));
-    t.details   = Field(Expand(Variant(c.details, rotateStep), v, false));
-    t.state     = Field(Expand(Variant(c.state, rotateStep), v, false));
-    t.largeText = Field(Expand(Variant(c.largeText, rotateStep), v, false));
-    t.smallText = c.showSmallIcon ? Field(Expand(Variant(c.smallText, rotateStep), v, false)) : std::string();
+    // advanced: own texts while paused or for a radio stream (an empty one stands for the normal text);
+    // automatic presets: the texts of the preset a rule picks for this track
+    const int set = !c.advancedTemplates ? 0 : !playing ? 1 : util::IsUrl(s.track.fileName) ? 2 : 0;
+    t.rule = MatchingRule(c, s);
+    const Config::Preset* ruled = t.rule >= 0 ? &c.presets[c.rules[t.rule].preset - 1] : nullptr;
+    auto texts = [&](int set_, int f) -> const std::wstring& {
+        return ruled ? ruled->texts[set_ * 4 + f] : TemplateText(c, set_, f);
+    };
+    auto field = [&](int f) -> const std::wstring& {
+        const std::wstring& own = texts(set, f);
+        return util::Trim(own).empty() ? texts(0, f) : own;
+    };
+    t.name      = Field(text(c.activityName));
+    t.details   = Field(text(field(0)));
+    t.state     = Field(text(field(1)));
+    t.largeText = Field(text(field(2)));
+    t.smallText = c.showSmallIcon ? Field(text(field(3))) : std::string();
     if (t.details.empty() && t.state.empty()) t.details = Field(v[L"filename"]);
 
     // clickable title (Discord: details_url, max. 256 chars)
@@ -152,6 +211,25 @@ ActivityTexts ComputeTexts(const Config& c, const Snapshot& s, clock_t_::duratio
             url = util::Trim(Expand(c.detailsUrl, shortV, true));
         }
         if (IsHttpUrl(url) && url.size() <= 256) t.detailsUrl = util::ToUtf8(url);
+    }
+
+    // buttons: Discord wants 1..32 characters per label and an http(s) link of at most 512 characters,
+    // otherwise it rejects the whole presence - such a button is left out
+    if (c.buttons) {
+        const std::wstring* b[2][2] = {{&c.button1Label, &c.button1Url}, {&c.button2Label, &c.button2Url}};
+        int n = 0;
+        for (auto& btn : b) {
+            std::string label = util::ToUtf8(util::Trim(text(*btn[0])));
+            size_t chars = 0, cut = 0;
+            for (; cut < label.size(); ++cut)
+                if (((unsigned char)label[cut] & 0xC0) != 0x80 && ++chars > 32) break;
+            label.resize(cut);   // 32 characters
+            const std::wstring url = util::Trim(Expand(*btn[1], v, true));
+            if (label.empty() || !IsHttpUrl(url) || url.size() > 512) continue;
+            t.buttonLabel[n] = label;
+            t.buttonUrl[n] = util::ToUtf8(url);
+            ++n;
+        }
     }
     return t;
 }
@@ -302,6 +380,12 @@ bool PresenceWorker::BuildActivity(const Config& c, const Snapshot& s, std::stri
     if (!t.details.empty()) a += ",\"details\":" + Quote(t.details);
     if (!t.state.empty()) a += ",\"state\":" + Quote(t.state);
     if (!t.detailsUrl.empty()) a += ",\"details_url\":" + Quote(t.detailsUrl);
+    if (!t.buttonLabel[0].empty()) {
+        a += ",\"buttons\":[";
+        for (int i = 0; i < 2 && !t.buttonLabel[i].empty(); ++i)
+            a += std::string(i ? "," : "") + "{\"label\":" + Quote(t.buttonLabel[i]) + ",\"url\":" + Quote(t.buttonUrl[i]) + "}";
+        a += "]";
+    }
 
     // progress bar (Listening) or elapsed counter (Playing)
     if (c.showTimestamps && t.playing) {

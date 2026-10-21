@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.6.0
+
+### New
+- **Advanced templates** (*Display* tab, off by default; without the tick everything stays as before). A new
+  *Templates* tab appears with multi-line fields for the texts (line breaks are only for a better overview) and a
+  list of all placeholders and functions:
+  - more fields - `%comment%` `%composer%` `%playcount%` `%filesize%` `%bitrate%` `%samplerate%` `%codec%` `%bpm%`
+    and more - and AIMP's conditions `%IF(A,B,C)`, `%IFEqual(A,B,C,D)`, `%IFGreater(A,B,C,D)` and
+    `%IFGreaterOrEqual(A,B,C,D)`, also nested and written the AIMP way (`%Comment` without the closing `%`), so
+    templates from AIMP can be copied. `%playcount%` comes from AIMP's statistics, which AIMP keeps for tracks of its
+    music library (GitHub issue #4 - thanks to [@TheConfusedlol](https://github.com/TheConfusedlol) for the idea!)
+  - **own texts while paused and for radio streams** ("Texts for: Playback / Pause / Radio / stream"); an empty field
+    takes the text for playback
+  - **presets**: up to 10 sets of texts, saved and loaded on the *Templates* tab. Every preset can also be loaded with
+    a hot key: AIMP lists "Load preset 1" to "Load preset 10" and "Load the next preset" under *Preferences > Hot
+    keys* (group "Discord Rich Presence"), local or global keys as for any AIMP action (AIMP 3 too:
+    there the presets are set in `DiscordRPC.ini`)
+  - **automatic presets**: up to 10 rules "if *field* contains / equals *text* -> preset" on the *Templates* tab,
+    checked for every track - e.g. playlist "Podcasts" -> preset "Podcast", genre "Classical" -> preset "Classic".
+    Fields: playlist, genre, artist, album, title, file path, comment, codec, radio / stream; several texts separated
+    by `;`, no case. The first matching rule wins, no match = the normal texts; a preset loaded by hot key wins until
+    the next track. The tab shows which rule applies to the current track
+- **Hot key "Discord display on / off"** (*Preferences > Hot keys*, group "Discord Rich Presence"): hides the presence
+  and shows it again, like the tick on the *General* tab
+- New placeholder **`%next%`**: the next track in AIMP's queue or playlist ("artist - title"), in AIMP 3 too
+- **Buttons**: two buttons under the presence with own labels and links, placeholders work (*Display* tab, off by
+  default; preset: "Lyrics on Genius" and "Find on Spotify" for the current track). Discord shows them only to
+  others, not on your own profile - the live preview shows them
+- *Display* and *Templates* tabs: the settings scroll (title link and buttons are at the bottom of *Display*), the live
+  preview always stays visible
+
 ## 1.5.4
 
 ### New

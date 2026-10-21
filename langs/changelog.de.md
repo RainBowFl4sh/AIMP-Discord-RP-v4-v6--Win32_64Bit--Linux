@@ -1,5 +1,37 @@
 # Änderungen
 
+## 1.6.0
+
+### Neu
+- **Erweiterte Vorlagen** (Tab *Anzeige*, standardmäßig aus; ohne Haken bleibt alles wie bisher). Dafür erscheint
+  der Tab *Vorlagen* mit mehrzeiligen Feldern für die Texte (Zeilenumbrüche dienen nur der Übersicht) und einer
+  Liste aller Platzhalter und Funktionen:
+  - mehr Felder - `%comment%` `%composer%` `%playcount%` `%filesize%` `%bitrate%` `%samplerate%` `%codec%` `%bpm%`
+    und weitere - und AIMPs Bedingungen `%IF(A,B,C)`, `%IFEqual(A,B,C,D)`, `%IFGreater(A,B,C,D)` und
+    `%IFGreaterOrEqual(A,B,C,D)`, auch verschachtelt und in AIMPs Schreibweise (`%Comment` ohne schließendes `%`),
+    sodass Vorlagen aus AIMP übernommen werden können. `%playcount%` kommt aus AIMPs Statistik, die AIMP für Titel
+    seiner Musikbibliothek führt (GitHub-Issue #4 – danke an [@TheConfusedlol](https://github.com/TheConfusedlol) für die Idee!)
+  - **eigene Texte für Pause und Radio-Streams** („Texte für: Wiedergabe / Pause / Radio / Stream“); ein leeres Feld
+    nimmt den Text für die Wiedergabe
+  - **Presets**: bis zu 10 Textsätze, im Tab *Vorlagen* gespeichert und geladen. Jedes Preset lässt sich auch per
+    Tastenkürzel laden: AIMP führt „Preset 1 laden“ bis „Preset 10 laden“ und „Nächstes Preset laden“ unter
+    *Einstellungen > Hotkeys* (Gruppe „Discord Rich Presence“), lokal oder global wie jede AIMP-Aktion (auch in
+    AIMP 3, dort werden die Presets in der `DiscordRPC.ini` eingetragen)
+  - **Presets automatisch wechseln**: bis zu 10 Regeln „wenn *Feld* enthält / ist gleich *Text* -> Preset“ im Tab
+    *Vorlagen*, bei jedem Titel geprüft - z. B. Playlist „Podcasts“ -> Preset „Podcast“, Genre „Klassik“ -> Preset
+    „Klassik“. Felder: Playlist, Genre, Interpret, Album, Titel, Dateipfad, Kommentar, Codec, Radio/Stream; mehrere
+    Texte mit `;` getrennt, Groß-/Kleinschreibung egal. Die erste passende Regel gilt, passt keine, gelten die normalen
+    Texte; ein per Hotkey geladenes Preset gilt bis zum nächsten Titel. Der Tab zeigt, welche Regel gerade greift
+- **Hotkey „Discord-Anzeige an / aus“** (*Einstellungen > Hotkeys*, Gruppe „Discord Rich Presence“): blendet die
+  Anzeige aus und wieder ein, wie der Haken im Tab *Allgemein*
+- Neuer Platzhalter **`%next%`**: der nächste Titel aus AIMPs Warteschlange oder Playlist („Interpret - Titel“), auch
+  in AIMP 3
+- **Buttons**: zwei Buttons unter der Anzeige mit eigener Beschriftung und eigenem Link, Platzhalter gehen (Tab
+  *Anzeige*, standardmäßig aus; vorbelegt mit „Lyrics on Genius“ und „Find on Spotify“ für den laufenden Titel).
+  Discord zeigt sie nur anderen, nicht im eigenen Profil - die Live-Vorschau zeigt sie
+- Tabs *Anzeige* und *Vorlagen*: Die Einstellungen sind scrollbar (Titel-Link und Buttons stehen unten in *Anzeige*),
+  die Live-Vorschau bleibt immer sichtbar
+
 ## 1.5.4
 
 ### Neu

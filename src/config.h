@@ -8,6 +8,10 @@
 // Built-in defaults shared by every user (never shown in the UI)
 inline const wchar_t* const kDefaultClientId  = L"1555109720807702559";   // Discord application "AIMP"
 inline const wchar_t* const kDefaultTitleLink = L"https://www.youtube.com/results?search_query=%artist%+%title%";
+inline const wchar_t* const kDefaultButton1Label = L"Lyrics on Genius";
+inline const wchar_t* const kDefaultButton1Url   = L"https://genius.com/search?q=%artist%+%title%";
+inline const wchar_t* const kDefaultButton2Label = L"Find on Spotify";
+inline const wchar_t* const kDefaultButton2Url   = L"https://open.spotify.com/search/%artist%%20%title%";
 
 struct Config {
     // --- General
@@ -22,10 +26,15 @@ struct Config {
     std::wstring excludePaths;                   // ';' separated substrings
 
     // --- Display
+    bool         advancedTemplates = false;      // more fields + AIMP-style %IF... functions in the texts below
     std::wstring details   = L"%title%";
     std::wstring state     = L"by %artist%";
     std::wstring largeText = L"%album%";
     std::wstring smallText = L"%status%";
+    // advanced only: own texts while paused / for radio streams, in the order details, state, largeText,
+    // smallText ("" = the normal text above)
+    std::wstring pausedTexts[4];
+    std::wstring streamTexts[4];
     bool         showSmallIcon  = true;
     int          barLength      = 12;            // characters for %bar%
     int          refreshSeconds = 15;            // refresh interval if %pos% / %bar% / %percent% are used
@@ -34,6 +43,34 @@ struct Config {
     bool         titleLink       = true;
     bool         titleLinkCustom = false;        // override the default YouTube search
     std::wstring titleLinkUrl    = kDefaultTitleLink;
+    // two buttons under the presence (Discord shows them to others only); label and link with placeholders
+    bool         buttons        = false;
+    std::wstring button1Label   = kDefaultButton1Label;
+    std::wstring button1Url     = kDefaultButton1Url;
+    std::wstring button2Label   = kDefaultButton2Label;
+    std::wstring button2Url     = kDefaultButton2Url;
+
+    // --- Presets of the Templates tab (loaded from the list or with AIMP hot keys)
+    struct Preset {
+        std::wstring name;            // "" = free slot
+        std::wstring texts[12];       // normal, paused, stream texts (4 each, see TemplateText)
+    };
+    static constexpr int kPresets = 10;
+    Preset       presets[kPresets];
+    int          activePreset = 0;   // 1..10: last preset loaded or saved, 0 = none
+    // automatic presets: on every track the first matching rule picks a preset (no match: the texts above)
+    enum RuleField { kRulePlaylist, kRuleGenre, kRuleArtist, kRuleAlbum, kRuleTitle, kRulePath, kRuleComment,
+                     kRuleCodec, kRuleStream, kRuleFields };
+    struct PresetRule {
+        int          field  = kRulePlaylist;
+        bool         equals = false;   // false: contains
+        std::wstring text;             // ';' separated alternatives, no case
+        int          preset = 0;       // 1..10, 0 = rule off
+    };
+    static constexpr int kRules = 10;
+    bool         autoPresets = false;
+    PresetRule   rules[kRules];
+    uint64_t     manualTrack = 0;     // not stored: a preset hot key wins over the rules until the track changes
 
     // --- Cover art
     bool         coverEnabled  = true;
@@ -72,6 +109,12 @@ struct Config {
     std::wstring clientId = kDefaultClientId;    // effective application ID
     std::wstring detailsUrl;                     // effective title link (empty = none)
 };
+
+// set 0 = normal, 1 = paused, 2 = stream; field 0..3 = details, state, largeText, smallText
+std::wstring&       TemplateText(Config& c, int set, int field);
+const std::wstring& TemplateText(const Config& c, int set, int field);
+void SavePreset(Config& c, int index, const std::wstring& name);   // index 0..9: the current texts -> preset
+bool LoadPreset(Config& c, int index);                             // preset -> texts (advanced on); false = free
 
 namespace config {
 void   SetProfileDir(const std::wstring& dir);   // at start, before Load: AIMP's profile folder (takes over old files)

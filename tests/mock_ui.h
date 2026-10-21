@@ -190,6 +190,9 @@ public:
     // IAIMPUIButton
     virtual HRESULT WINAPI ShowDropDownMenu() { return S_OK; }
 
+    // IAIMPUIScrollBox
+    virtual HRESULT WINAPI MakeVisible(IAIMPUIControl*) { return S_OK; }
+
     // IAIMPUIPageControl
     virtual HRESULT WINAPI Add(IAIMPString* name, IAIMPUITabSheet** page);
     virtual HRESULT WINAPI Delete2(IAIMPUITabSheet*) { return E_NOTIMPL; }
@@ -317,6 +320,8 @@ public:
         if (is(IID_IAIMPUIPageControl)) { *obj = static_cast<IAIMPUIPageControl*>(reg.Make<IAIMPUIPageControl>(K("Tabs"), n, events, pp)); return S_OK; }
         if (is(IID_IAIMPUIMemo))        { *obj = static_cast<IAIMPUIMemo*>(reg.Make<IAIMPUIMemo>(K("Memo"), n, events, pp)); return S_OK; }
         if (is(IID_IAIMPUIImage))       { *obj = static_cast<IAIMPUIImage*>(reg.Make<IAIMPUIImage>(K("Image"), n, events, pp)); return S_OK; }
+        if (is(IID_IAIMPUIScrollBox))   { *obj = static_cast<IAIMPUIScrollBox*>(reg.Make<IAIMPUIScrollBox>(K("Scroll"), n, events, pp)); return S_OK; }
+        if (is(IID_IAIMPUIPanel))       { *obj = static_cast<IAIMPUIPanel*>(reg.Make<IAIMPUIPanel>(K("Panel"), n, events, pp)); return S_OK; }
         if (is(IID_IAIMPUIPaintBox))    { *obj = static_cast<IAIMPUIPaintBox*>(reg.Make<IAIMPUIPaintBox>(K("Paint"), n, events, pp)); return S_OK; }
         return E_NOTIMPL;
     }

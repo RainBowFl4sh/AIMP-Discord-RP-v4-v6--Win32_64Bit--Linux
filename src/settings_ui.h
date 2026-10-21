@@ -16,6 +16,9 @@
 #include "presence.h"
 #include "preview.h"
 
+// The presets changed (saved / deleted on the Templates tab): the plugin renames its hot key actions (plugin.cpp).
+void PresetsChanged();
+
 class SettingsPage {
 public:
     // Creates the page as a child form of 'parent' (AIMP's options container). nullptr if the UI service is missing.
@@ -30,12 +33,15 @@ public:
 
     void OnControlChanged(int id);             // called by the controls' event handlers
     void OnDraw(int id, HCANVAS canvas, const RECT& r);   // paint boxes: live preview, author picture
+    bool OnWheel(int id, int delta);           // mouse wheel over a scroll box (AIMP 4) or a list in one: true = handled
+    bool ScrollStep(int box, int delta);       // scrolls a scroll box by about two rows
 
 private:
     SettingsPage() = default;
     bool Build(HWND parent);
     void BuildGeneral(IAIMPUIWinControl* page);
     void BuildDisplay(IAIMPUIWinControl* page);
+    void BuildTemplates(IAIMPUIWinControl* page);
     void BuildCover(IAIMPUIWinControl* page);
     void BuildSources(IAIMPUIWinControl* page);
     void BuildAdvanced(IAIMPUIWinControl* page);
@@ -48,7 +54,13 @@ private:
     void RefreshImages(const PresenceStatus& st);
     void RefreshUpdate();
     void RefreshLog();
-    void BuildPreview();
+    void BuildPreview(bool templatesTab);
+    void ShowTemplateSet(int set);            // the texts of one set (normal / paused / stream) -> multi-line fields
+    void FillPresets(int select);             // preset list from the config, 'select' = index or -1
+    void SavePresetSlot();
+    void DeletePresetSlot();
+    void LoadPresetSlot(int index);
+    int  PresetSlot() const;                  // selected slot, else the first free one
     void ExportSettings();
     void ImportSettings();
     std::wstring AskFile(bool save);
@@ -63,10 +75,13 @@ private:
     void Edit(IAIMPUIWinControl* p, int id, int x, int y, int w, bool password = false);
     void Combo(IAIMPUIWinControl* p, int id, std::initializer_list<const char*> keys, int x, int y, int w);
     void Button(IAIMPUIWinControl* p, int id, const char* key, int x, int y, int w);
-    void Memo(IAIMPUIWinControl* p, int id, int x, int y, int w, int h);
+    void Memo(IAIMPUIWinControl* p, int id, int x, int y, int w, int h, bool editable = false);
     void Image(IAIMPUIWinControl* p, int id, int x, int y, int w, int h);
     void Paint(IAIMPUIWinControl* p, int id, int x, int y, int w, int h);
     void ActionInfo(const char* key);         // note next to the Advanced tab's buttons, cleared after a while
+    IAIMPUIWinControl* BeginScroll(IAIMPUIWinControl* page, int id, int height);   // settings that scroll (or page)
+    void EndScroll();
+    void FillRulePresets();                   // preset lists of the automatic rules ("-", "1: name", ...)
 
     IAIMPUIControl* Item(int id) const;
     void SetCheck(int id, bool v);
@@ -90,6 +105,7 @@ private:
     IAIMPUIForm*       form_ = nullptr;
     IUnknown*          formEvents_ = nullptr;
     IAIMPUIPageControl* tabs_ = nullptr;     // owned through anonymous_
+    IAIMPUITabSheet*   templatesSheet_ = nullptr;   // shown only with advanced placeholders (owned through anonymous_)
     HWND               hwnd_ = 0;
     std::map<int, IAIMPUIControl*> items_;   // id -> control (one reference each)
     std::map<int, int> kinds_;               // id -> control kind
@@ -113,4 +129,16 @@ private:
     uint64_t       actionUntil_ = 0;          // TickMs when the action note is cleared (0 = none)
     int            reconnectFrom_ = -1;       // connects before "Reconnect" was pressed (-1 = none pending)
     PreviewData    preview_;
+
+    // Templates tab: the texts of the three sets (one line each, as stored); the fields show set tplSet_
+    std::wstring   tpl_[3][4];
+    int            tplSet_ = 0;
+    int            loadedPreset_ = 0;         // preset loaded into the page and not applied yet (1..10, 0 = none)
+    std::wstring   shownRule_;                // text of the "rule in use" line
+
+    // scroll boxes: AIMP 4 does not scroll them with the mouse wheel, the page does (rows: bounds of the controls)
+    struct ScrollRow { IAIMPUIControl* control; int top, bottom; };
+    struct ScrollArea { int height = 0, content = 0, top = 0; IAIMPUIControl* panel = nullptr; std::vector<ScrollRow> rows; };
+    std::map<int, ScrollArea> scrolls_;
+    ScrollArea*    building_ = nullptr;       // controls placed now go into this scroll box
 };

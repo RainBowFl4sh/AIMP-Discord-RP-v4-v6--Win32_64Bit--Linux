@@ -36,11 +36,16 @@ struct ActivityTexts {
     std::string name;                                   // instead of the application name, "" = the app's name
     std::string details, state, largeText, smallText;   // UTF-8, "" = line not shown
     std::string detailsUrl;                             // clickable title, "" = none
+    std::string buttonLabel[2], buttonUrl[2];           // buttons (only shown to others), "" = none
+    int         rule = -1;                              // automatic presets: the rule in use, -1 = none
 };
 // rotateStep: which variant of texts with several variants ("%artist% || %title%") is shown
 ActivityTexts ComputeTexts(const Config& c, const Snapshot& s, std::chrono::steady_clock::duration pausedFor,
                            int rotateStep = 0);
 bool HasVariants(const Config& c);   // a text field contains "||"
+// automatic presets: index (0..9) of the rule that picks the preset for this track, -1 = none (texts as set)
+int MatchingRule(const Config& c, const Snapshot& s);
+bool UsesPlaceholder(const Config& c, const wchar_t* name);   // a text that can be shown uses %name%
 
 struct PresenceStatus {
     enum Kind { Starting, Disabled, NotConnected, Connected } kind = Starting;

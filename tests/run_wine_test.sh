@@ -14,6 +14,7 @@ TMP="$(mktemp -d)"
 OUT="${2:-$TMP/out}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
+rm -f "$OUT/exported-settings.ini"   # left from an earlier run: the save dialog would ask before replacing it
 PIDS=()
 cleanup() {
     for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done   # never "kill 0": that hits the process group
@@ -74,6 +75,20 @@ before=$(wc -l < "$TMP/frames.log")
 (cd "$TMP" && AIMP_TEST_ROTATE=1 wine host_test.exe aimp_discord_rpc.dll > "$TMP/rotate.out")
 tail -n +$((before + 1)) "$TMP/frames.log" > "$TMP/rotate.frames"
 python3 "$HERE/check_rotation.py" "$TMP/rotate.frames" "$TMP/rotate.out" || exit 1
+
+# advanced placeholders (GitHub issue #4): templates unit test, then more fields and nested %IF... end to end
+cp "$BUILD/template_test.exe" "$TMP/"
+(cd "$TMP" && wine template_test.exe) || exit 1
+for formatter in 1 0; do
+    printf '[DiscordRPC]\r\nConfigVersion=9\r\nCoverEnabled=0\r\nAdvancedPlaceholders=1\r\nDetails=%s\r\nState=%%composer%% - %%bitrate%% kbps\r\nUpdateCheck=0\r\n' \
+        '%If(%Comment,%Comment,%IFEqual(%PlayCount,1,This song has been played once before,%IFGreater(%PlayCount,1,This song has been played %PlayCount times,%FileSize)))' > "$APPDATA_DIR/AIMP/DiscordRPC.ini"
+    before=$(wc -l < "$TMP/frames.log")
+    (cd "$TMP" && AIMP_TEST_ADVANCED=1 AIMP_TEST_FORMATTER=$formatter wine host_test.exe aimp_discord_rpc.dll > "$TMP/advanced.out") \
+        || { cat "$TMP/advanced.out"; exit 1; }
+    grep "^advanced:" "$TMP/advanced.out"
+    tail -n +$((before + 1)) "$TMP/frames.log" > "$TMP/advanced.frames"
+    python3 "$HERE/check_advanced.py" "$TMP/advanced.frames" || exit 1
+done
 
 for lang in "ru:Русский" "de:Deutsch" "uk:Українська"; do
     rm -rf "$APPDATA_DIR/AIMP"

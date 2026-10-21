@@ -43,6 +43,7 @@ add_library(aimp_discord_rpc SHARED
     src/settings_ui.cpp
     src/preview.cpp
     src/presence.cpp
+    src/template.cpp
     src/discord_ipc.cpp
     src/cover.cpp
     src/jobs.cpp
@@ -94,6 +95,19 @@ else()
     # only AIMPPluginGetHeader is exported (not the C++ library). Released builds: tools/build_linux_portable.sh
     target_link_options(aimp_discord_rpc PRIVATE -static-libstdc++ -static-libgcc -Wl,--no-undefined
         "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/exports.map")
+endif()
+
+# Unit test of the text templates (placeholders, %IF... functions), run by the test scripts
+add_executable(template_test EXCLUDE_FROM_ALL tests/template_test.cpp src/template.cpp src/util.cpp)
+target_include_directories(template_test PRIVATE src)
+if(WIN32)
+    target_compile_definitions(template_test PRIVATE UNICODE _UNICODE NOMINMAX)
+    target_link_libraries(template_test PRIVATE winhttp shlwapi ole32 user32)
+    if(MINGW)
+        target_link_options(template_test PRIVATE -static -static-libgcc -static-libstdc++)
+    endif()
+else()
+    target_link_libraries(template_test PRIVATE dl pthread)
 endif()
 
 # Mock AIMP host for tests/run_linux_test.sh and tests/run_wine_test.sh (not part of the plugin, not built by default)
