@@ -1,5 +1,23 @@
 # Änderungen
 
+## 1.6.1
+
+### Neu
+- **Anklickbare Platzhalter**: Eine Leiste über der Live-Vorschau (Tab *Anzeige* und *Vorlagen*) zeigt jeden
+  Platzhalter als Button. Sie bleibt stehen, während die Felder scrollen - Felder und Platzhalter sind zusammen zu
+  sehen. Ein Klick fügt ihn am Textcursor des zuletzt angeklickten Felds ein, bei Bedarf mit Leerzeichen davor und
+  danach - so lässt sich ein Text ganz ohne Tastatur zusammenklicken. Funktionen wie `%IF(A,B,C)` kommen mit ihren
+  Kommas, der Cursor steht dann in der Klammer
+- Die Platzhalter sind in Gruppen sortiert (Titel und Album, Wiedergabe, Datei und Audio, weitere Tags,
+  Funktionen), die Reiter der Leiste wechseln zwischen ihnen - kein Scrollen mehr in einem kleinen Kästchen
+
+### Geändert
+- `%samplerate%` zeigt kHz mit Einheit: `44.1kHz`, `48kHz` (bisher `44100`)
+- `%bitdepth%` zeigt die Einheit: `16bit` (bisher `16`)
+- Vorhandene Texte werden einmalig angepasst: Eine dahinter geschriebene Einheit (`%samplerate%Hz`,
+  `%samplerate% kHz`, `%bitdepth% bit`) wird entfernt, damit sie nicht doppelt erscheint. `%IFGreater` und die
+  anderen Bedingungen vergleichen weiterhin mit den alten Zahlen (`%IFGreater(%samplerate%,44100,...)` geht weiter)
+
 ## 1.6.0
 
 ### Neu
