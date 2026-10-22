@@ -3,7 +3,9 @@
 #include <cwchar>
 #include <map>
 #include <mutex>
+#include <vector>
 
+#include "template.h"
 #include "util.h"
 #include "version.h"
 
@@ -15,9 +17,9 @@ std::mutex g_fileMu;    // file access + g_stamp; serializes writers
 uint64_t   g_stamp = 0;
 
 const wchar_t* const kSection = L"DiscordRPC";
-const int kConfigVersion = 9;   // 5 = 1.5.0 (one INI format for both platforms, UTF-16 on Windows), 6 = 1.5.3 (x0.at),
+const int kConfigVersion = 10;  // 5 = 1.5.0 (one INI format for both platforms, UTF-16 on Windows), 6 = 1.5.3 (x0.at),
                                 // 7 = 1.5.4 (RotateSeconds), 8 = AdvancedPlaceholders, 9 = 1.6.0 (texts for pause /
-                                // streams, presets, buttons)
+                                // streams, presets, buttons), 10 = 1.6.1 (%samplerate% / %bitdepth% with their unit)
 
 const wchar_t* const kFieldKeys[4] = {L"Details", L"State", L"LargeText", L"SmallText"};
 const wchar_t* const kSetKeys[3] = {L"", L"Paused", L"Stream"};
@@ -189,6 +191,14 @@ Config FromText(const std::wstring& text, bool* found = nullptr, long long* vers
     if (ver < 2 && c.state == L"%artist%") c.state = L"by %artist%";   // 1.1 default
     if (ver < 4) c.pausedBehavior = 1;                                // 1.3: hide while paused (PreMiD wins)
     if (ver < 6 && c.uploadHost == 1) c.uploadHost = 3;               // 1.5.3: catbox.moe (old default) -> x0.at
+    if (ver < 10) {   // 1.6.1: "%samplerate%Hz" / "%bitdepth% bit" would show the unit twice
+        std::vector<std::wstring*> texts = {&c.activityName, &c.titleLinkUrl, &c.button1Label, &c.button1Url,
+                                            &c.button2Label, &c.button2Url};
+        for (int i = 0; i < 12; ++i) texts.push_back(&TemplateText(c, i / 4, i % 4));
+        for (auto& p : c.presets)
+            for (std::wstring& t : p.texts) texts.push_back(&t);
+        for (std::wstring* t : texts) *t = tmpl::DropOldUnits(*t);
+    }
     if (!r.Find(L"UploadHost")) {                                    // 1.0: "CoverImgur"
         bool imgur = false;
         r.Bool(L"CoverImgur", imgur);

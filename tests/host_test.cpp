@@ -658,9 +658,21 @@ bool AllTranslated(Core* core) {
 #else
 #define kImageExt ".png"   // cairo image surface
 #endif
-bool RenderPreview(Core* core, const std::string& path, int scale, int nth = 0) {   // nth paint box: 0 preview, 1 templates preview, 2 avatar
+// paint boxes without the placeholder buttons (those have a hint): 0 preview, 1 templates preview, 2 avatar
+bool FindPaint(Core* core, Info& out, int nth) {
+    for (auto& get : core->ui.reg.all) {
+        Info i = get();
+        if (i.kind == mockui::Service::K("Paint") && !i.strs->count(AIMPUI_CONTROL_PROPID_HINT) && nth-- == 0) {
+            out = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool RenderPreview(Core* core, const std::string& path, int scale, int nth = 0) {
     Info paint;
-    if (!FindKind(core, "Paint", paint, nth)) return false;
+    if (!FindPaint(core, paint, nth)) return false;
     const int w = (paint.bounds.right - paint.bounds.left) * scale, h = (paint.bounds.bottom - paint.bounds.top) * scale;
     RECT r = {0, 0, w, h};
 #ifdef _WIN32
@@ -963,6 +975,43 @@ bool AnswerFileDialog(const wchar_t* title, const std::wstring& file, const std:
 }
 #endif
 
+// Placeholder bars (1.6.1): 'box' 0 = Display tab, 1 = Templates tab. Clicks the tab of 'group', then its button
+// 'index' (found by moving over the bar: the highlight changes on entering a button and on leaving it), which inserts
+// the placeholder into the field with the text cursor.
+bool ClickInRow(Info& i, const std::function<Info()>& get, int y, int index) {
+    i.mouse(3, -1, -1);
+    i = get();
+    int changes = 0;
+    for (int x = -3; x < 445; ++x) {
+        const int before = i.invalidated;
+        i.mouse(0, x, y);
+        if (get().invalidated != before && ++changes == 2 * index + 1) {
+            i.mouse(1, x, y);
+            i.mouse(2, x, y);
+            i.mouse(3, -1, -1);
+            return true;
+        }
+        i = get();
+    }
+    return false;
+}
+
+bool ClickPlaceholder(Core* core, int box, int group, int index) {
+    int seen = 0;
+    for (auto& get : core->ui.reg.all) {
+        Info i = get();
+        if (i.kind != mockui::Service::K("Paint") || !i.strs->count(AIMPUI_CONTROL_PROPID_HINT) || seen++ != box) continue;
+        return ClickInRow(i, get, 5, group) && ClickInRow(i, get, 26 + 5, index);   // tabs, then the first row
+    }
+    return false;
+}
+
+void Cursor(Info& field, bool focused, int start) {
+    (*field.ints)[AIMPUI_WINCONTROL_PROPID_FOCUSED] = focused ? 1 : 0;
+    (*field.ints)[AIMPUI_BASEEDIT_PROPID_SELSTART] = start;
+    (*field.ints)[AIMPUI_BASEEDIT_PROPID_SELLENGTH] = 0;
+}
+
 // Opens the settings page, checks the layout, edits values and saves them (what a user does in Preferences).
 int TestSettingsPage(Core* core, bool uiOnly) {
     IAIMPOptionsDialogFrame* frame = core->frame;
@@ -1016,7 +1065,7 @@ int TestSettingsPage(Core* core, bool uiOnly) {
                               : lang == "Українська" ? "  (встановлена)" : "  (installed)";
         const char* section = lang == "Русский" ? "Новое:" : lang == "Deutsch" ? "Neu:" : lang == "Українська" ? "Нове:" : "New:";
         Info changelog;
-        if (!FindKind(core, "Memo", changelog, 6)) return Fail("changelog memo");
+        if (!FindKind(core, "Memo", changelog, 5)) return Fail("changelog memo");
         const TStr text = (*changelog.strs)[AIMPUI_BASEEDIT_PROPID_TEXT];
         const size_t top = text.find(FromUtf8(AIMP_DISCORD_RPC_VERSION) + S(installed));
         if (top == TStr::npos || top > 400) return Fail("changelog with the installed version on top");
@@ -1088,6 +1137,17 @@ int TestSettingsPage(Core* core, bool uiOnly) {
     exportBtn.fire();   // cancelled dialog: nothing happens
 #endif
     printf("settings page: export / import OK\n");
+
+    // placeholder buttons of the Display tab: inserted at the text cursor, with spaces
+    (*details.strs)[AIMPUI_BASEEDIT_PROPID_TEXT] = T("by");
+    Cursor(details, true, 2);
+    if (!ClickPlaceholder(core, 0, 0, 1) || (*details.strs)[AIMPUI_BASEEDIT_PROPID_TEXT] != T("by %artist% ") ||
+        (*details.ints)[AIMPUI_BASEEDIT_PROPID_SELSTART] != 12)
+        return Fail("placeholder button %artist% after \"by\"");
+    Cursor(details, false, 0);   // no field has the cursor now: the field clicked last, at its cursor
+    if (!ClickPlaceholder(core, 0, 1, 0) || (*details.strs)[AIMPUI_BASEEDIT_PROPID_TEXT] != T("%status% by %artist% "))
+        return Fail("placeholder button %status% into the field clicked last");
+    printf("settings page: placeholder buttons insert at the text cursor\n");
 
     // the user edits the first line
     (*details.strs)[AIMPUI_BASEEDIT_PROPID_TEXT] = T("%title% [test]");
@@ -1186,6 +1246,20 @@ int TestTemplateSets(Core* core) {
     if (!FindCombo(core, T("1: (free)"), presets)) return Fail("preset list with free slots");
     if (presets.items->size() != 10) return Fail("10 preset slots");
     const TStr issue = MemoText(core, 0);
+    {   // placeholder buttons: a function with its commas, the cursor in the brackets; then a field inside it
+        const TStr state = MemoText(core, 1);
+        Info memo;
+        FindKind(core, "Memo", memo, 1);
+        SetMemo(core, 1, T("x"));
+        Cursor(memo, true, 1);
+        if (!ClickPlaceholder(core, 1, 4, 0) || MemoText(core, 1) != T("x %IF(,,)") ||
+            (*memo.ints)[AIMPUI_BASEEDIT_PROPID_SELSTART] != 6)
+            return Fail("placeholder button %IF");
+        if (!ClickPlaceholder(core, 1, 2, 2) || MemoText(core, 1) != T("x %IF(%samplerate%,,)"))
+            return Fail("placeholder button inside a function");
+        SetMemo(core, 1, state);
+        printf("templates: placeholder buttons (function, field inside it)\n");
+    }
     Select(sets, 1);   // pause: the fields start empty (= the texts for playback)
     if (!MemoText(core, 0).empty()) return Fail("pause texts should start empty");
     SetMemo(core, 0, T("Paused:\n  %composer%"));
@@ -1329,6 +1403,8 @@ int RunTests(Core* core) {
         info->text[AIMP_FILEINFO_PROPID_COMPOSER] = T("Freddie Mercury");
         info->text[AIMP_FILEINFO_PROPID_COMMENT] = T("");
         info->ints[AIMP_FILEINFO_PROPID_BITRATE] = 320;
+        info->ints[AIMP_FILEINFO_PROPID_SAMPLERATE] = 44100;   // %samplerate% 44.1kHz, %bitdepth% 16bit (1.6.1)
+        info->ints[AIMP_FILEINFO_PROPID_BITDEPTH] = 16;
         info->int64s[AIMP_FILEINFO_PROPID_FILESIZE] = 14176256;
         core->formatter->playCount = Env("AIMP_TEST_FORMATTER") == "0" ? -1 : 7;
         info->ints[AIMP_FILEINFO_PROPID_ML_PLAYCOUNT] = 7;   // the music library's value (fallback)
@@ -1409,7 +1485,7 @@ int RunTests(Core* core) {
         }
         if (!avatar) return Fail("author picture not drawn on the About tab");
         Info log;
-        if (!FindKind(core, "Memo", log, 5) || log.lines->empty()) return Fail("log lines on the Advanced tab");
+        if (!FindKind(core, "Memo", log, 4) || log.lines->empty()) return Fail("log lines on the Advanced tab");
         printf("settings page: status, cover source, pictures and log OK (%d log lines)\n", (int)log.lines->size());
         const std::string out = Env("AIMP_TEST_OUT", ".");
         if (!RenderPreview(core, out + "/preview-playing" kImageExt, 1) ||

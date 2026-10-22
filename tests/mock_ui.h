@@ -61,6 +61,18 @@ public:
             e->Release();
         }
     }
+    bool Mouse(int what, int x, int y) {   // 0 move, 1 down, 2 up, 3 leave (left button)
+        IAIMPUIMouseEvents* e = nullptr;
+        if (!events_ || events_->QueryInterface(IID_IAIMPUIMouseEvents, reinterpret_cast<void**>(&e)) != S_OK || !e)
+            return false;
+        IUnknown* self = static_cast<I*>(this);
+        if (what == 0) e->OnMouseMove(self, x, y, 0);
+        if (what == 1) e->OnMouseDown(self, umbLeft, x, y, 0);
+        if (what == 2) e->OnMouseUp(self, umbLeft, x, y, 0);
+        if (what == 3) e->OnMouseLeave(self);
+        e->Release();
+        return true;
+    }
     bool Paint(HCANVAS canvas, const RECT& r) {
         IAIMPUIDrawEvents* e = nullptr;
         if (!events_ || events_->QueryInterface(IID_IAIMPUIDrawEvents, reinterpret_cast<void**>(&e)) != S_OK || !e)
@@ -232,6 +244,7 @@ struct Registry {
         int invalidated;
         void* self;
         void* parent;
+        std::function<bool(int, int, int)> mouse;
     };
     std::vector<std::function<Info()>> all;
 
@@ -245,7 +258,8 @@ struct Registry {
                         [c]() { c->FireChanged(); },
                         [c](HCANVAS h, const RECT& r) { return c->Paint(h, r); },
                         c->placed, c->alignment, c->anchors, c->bounds, c->invalidated,
-                        static_cast<IAIMPUIControl*>(static_cast<I*>(c)), c->parent};
+                        static_cast<IAIMPUIControl*>(static_cast<I*>(c)), c->parent,
+                        [c](int what, int x, int y) { return c->Mouse(what, x, y); }};
         });
         return c;
     }

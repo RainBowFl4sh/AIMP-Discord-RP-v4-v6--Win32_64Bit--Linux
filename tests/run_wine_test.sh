@@ -80,7 +80,7 @@ python3 "$HERE/check_rotation.py" "$TMP/rotate.frames" "$TMP/rotate.out" || exit
 cp "$BUILD/template_test.exe" "$TMP/"
 (cd "$TMP" && wine template_test.exe) || exit 1
 for formatter in 1 0; do
-    printf '[DiscordRPC]\r\nConfigVersion=9\r\nCoverEnabled=0\r\nAdvancedPlaceholders=1\r\nDetails=%s\r\nState=%%composer%% - %%bitrate%% kbps\r\nUpdateCheck=0\r\n' \
+    printf '[DiscordRPC]\r\nConfigVersion=9\r\nCoverEnabled=0\r\nAdvancedPlaceholders=1\r\nDetails=%s\r\nState=%%composer%% - %%bitrate%% kbps\r\nLargeText=%%samplerate%%Hz / %%bitdepth%% bit\r\nUpdateCheck=0\r\n' \
         '%If(%Comment,%Comment,%IFEqual(%PlayCount,1,This song has been played once before,%IFGreater(%PlayCount,1,This song has been played %PlayCount times,%FileSize)))' > "$APPDATA_DIR/AIMP/DiscordRPC.ini"
     before=$(wc -l < "$TMP/frames.log")
     (cd "$TMP" && AIMP_TEST_ADVANCED=1 AIMP_TEST_FORMATTER=$formatter wine host_test.exe aimp_discord_rpc.dll > "$TMP/advanced.out") \

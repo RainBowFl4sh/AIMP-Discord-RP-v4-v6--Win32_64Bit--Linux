@@ -31,4 +31,12 @@ std::wstring Pretty(const std::wstring& oneLine);
 // The text uses one of these placeholders (also the AIMP way without the closing %)
 bool Uses(const std::wstring& t, std::initializer_list<const wchar_t*> names, bool advanced);
 
+// Values with their unit: 44100 -> "44.1kHz", 48000 -> "48kHz"; 16 -> "16bit". Empty / no number: unchanged.
+std::wstring SampleRateText(const std::wstring& hz);
+std::wstring BitDepthText(const std::wstring& bits);
+
+// Up to 1.6.0 %samplerate% / %bitdepth% were bare numbers, so texts carried the unit themselves ("%samplerate%Hz",
+// "%bitdepth% bit"). Removes such a unit right after the placeholder: the value brings its own now.
+std::wstring DropOldUnits(const std::wstring& t);
+
 }  // namespace tmpl

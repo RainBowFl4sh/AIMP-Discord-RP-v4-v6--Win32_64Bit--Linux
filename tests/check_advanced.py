@@ -3,7 +3,8 @@
 
 Usage: check_advanced.py <frames of this run>
 Settings of the run: AdvancedPlaceholders=1, Details = the example of the issue (AIMP syntax, nested %IF...),
-State=%composer% - %bitrate% kbps. The host plays a track with play count 7, then 8 (same track), then a comment,
+State=%composer% - %bitrate% kbps, LargeText=%samplerate%Hz / %bitdepth% bit (ConfigVersion 9: the units written in
+the text are removed, the values bring them - 44.1kHz / 16bit). The host plays a track with play count 7, then 8 (same track), then a comment,
 then neither (file size 13.52 MB). Then (Templates tab) a text for pause "Paused: %composer%" and the buttons are
 applied and the track is paused and resumed, then "Changed %bitrate%" is applied and preset 1 (the issue's
 template) loaded by its hot key. Then "Base %bitrate%" is applied with rule 1 "title contains rhapsody -> preset 1":
@@ -13,7 +14,7 @@ its hot key (the activity is cleared once and comes back).
 import json
 import sys
 
-details, states, buttons = [], [], []
+details, states, buttons, large = [], [], [], set()
 clears_after_rule = 0
 for line in open(sys.argv[1], encoding="utf-8"):
     try:
@@ -27,6 +28,7 @@ for line in open(sys.argv[1], encoding="utf-8"):
         continue
     if not details or details[-1] != a.get("details"):
         details.append(a.get("details"))
+    large.add(a.get("assets", {}).get("large_text"))
     if a.get("buttons"):
         buttons.append(a["buttons"])
     if not states or states[-1] != a.get("state"):
@@ -38,6 +40,10 @@ want = ["This song has been played 7 times", "This song has been played 8 times"
 ok = details == want
 if not ok:
     print("FAILED: first line should be", want)
+print("large text:", sorted(t for t in large if t))
+if "44.1kHz / 16bit" not in large:
+    ok = False
+    print("FAILED: large text should be 44.1kHz / 16bit (old units removed)")
 if states != ["Freddie Mercury - 320 kbps"]:
     print("FAILED: second line (new fields)"); ok = False
 print("cleared after the rule:", clears_after_rule)

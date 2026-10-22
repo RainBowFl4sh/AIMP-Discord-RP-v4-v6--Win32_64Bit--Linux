@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cwchar>
+#include <cwctype>
+#include <iterator>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -32,10 +35,12 @@ enum Ids {
     IDC_TITLELINKCUSTOM, IDC_TITLELINKURL, IDC_PREVIEW, IDC_ROTATE, IDC_ADVANCED, IDC_PLACEHOLDERS,
     // Templates (advanced placeholders, only shown when they are switched on)
     IDC_TPLDETAILS = 350, IDC_TPLSTATE, IDC_TPLLARGETEXT, IDC_TPLSMALLTEXT, IDC_TPLPREVIEW, IDC_PRESET, IDC_PRESETNAME,
-    IDC_PRESETSAVE, IDC_PRESETDELETE, IDC_TPLSET, IDC_TPLSETHINT, IDC_TPLLIST, IDC_TPLSCROLL, IDC_AUTOPRESETS,
+    IDC_PRESETSAVE, IDC_PRESETDELETE, IDC_TPLSET, IDC_TPLSETHINT, IDC_TPLHINT, IDC_TPLSCROLL, IDC_AUTOPRESETS,
     IDC_AUTOHINT, IDC_RULESTATUS,
     // automatic preset rules: one id per rule and column
     IDC_RULEFIELD = 3000, IDC_RULEOP = 3010, IDC_RULETEXT = 3020, IDC_RULEPRESET = 3030,
+    // placeholder buttons: one paint box per group (Templates tab, Display tab)
+    IDC_TPLCHIPS = 3100, IDC_DISPCHIPS = 3200,
     // Cover art
     IDC_COVER = 400, IDC_EMBEDDED, IDC_FOLDER, IDC_FOLDERNAMES, IDC_UPLOADHOST, IDC_IMGURID, IDC_PREFERLOCAL,
     IDC_CLEARCACHE, IDC_CACHEINFO, IDC_COVERIMG, IDC_COVERINFO, IDC_COVERLINK,
@@ -60,6 +65,44 @@ const int kTemplateFields[][2] = {{IDC_DETAILS, IDC_TPLDETAILS}, {IDC_STATE, IDC
                                   {IDC_LARGETEXT, IDC_TPLLARGETEXT}, {IDC_SMALLTEXT, IDC_TPLSMALLTEXT}};
 const char* const kSetHints[3] = {nullptr, "Tpl.HintPaused", "Tpl.HintStream"};
 
+// The placeholders under the text fields, in groups; a click inserts one at the text cursor (InsertPlaceholder)
+struct PlaceholderGroup {
+    const char* key;
+    const wchar_t* items[12];   // up to the first nullptr
+};
+const PlaceholderGroup kTemplateGroups[] = {
+    {"Tpl.GroupTrack", {L"%title%", L"%artist%", L"%album%", L"%albumartist%", L"%year%", L"%genre%", L"%track%",
+                        L"%tracktotal%", L"%disc%", L"%disctotal%"}},
+    {"Tpl.GroupPlayback", {L"%status%", L"%pos%", L"%dur%", L"%percent%", L"%bar%", L"%playlist%", L"%next%",
+                           L"%playcount%"}},
+    {"Tpl.GroupAudio", {L"%codec%", L"%bitrate%", L"%samplerate%", L"%bitdepth%", L"%channels%", L"%filename%",
+                        L"%ext%", L"%filesize%", L"%filesizebytes%"}},
+    {"Tpl.GroupTags", {L"%composer%", L"%lyricist%", L"%conductor%", L"%copyright%", L"%comment%", L"%mood%",
+                       L"%isrc%", L"%key%", L"%bpm%", L"%rating%"}},
+    {"Tpl.GroupFuncs", {L"%IF(A,B,C)", L"%IFEqual(A,B,C,D)", L"%IFGreater(A,B,C,D)", L"%IFGreaterOrEqual(A,B,C,D)"}},
+};
+const PlaceholderGroup kDisplayGroups[] = {   // without advanced templates: only these
+    {"Tpl.GroupTrack", {L"%title%", L"%artist%", L"%album%", L"%albumartist%", L"%year%", L"%genre%", L"%track%"}},
+    {"Tpl.GroupPlayback", {L"%status%", L"%pos%", L"%dur%", L"%percent%", L"%bar%", L"%playlist%", L"%next%"}},
+    {"Tpl.GroupFile", {L"%filename%", L"%ext%"}},
+};
+// the fields a placeholder can go into (the first one when none was clicked yet); links get no spaces
+const int kDisplayTargets[] = {IDC_DETAILS, IDC_STATE, IDC_LARGETEXT, IDC_SMALLTEXT, IDC_TITLELINKURL,
+                               IDC_BTN1LABEL, IDC_BTN1URL, IDC_BTN2LABEL, IDC_BTN2URL};
+const int kTemplateTargets[] = {IDC_TPLDETAILS, IDC_TPLSTATE, IDC_TPLLARGETEXT, IDC_TPLSMALLTEXT};
+bool IsLinkField(int id) { return id == IDC_TITLELINKURL || id == IDC_BTN1URL || id == IDC_BTN2URL; }
+const float kChipH = 20, kChipGap = 5, kChipPad = 14, kTabGap = 2;
+// the groups of a placeholder bar (SettingsPage::ChipBox)
+template <class Box, size_t N> Box ChipGroups(const PlaceholderGroup (&groups)[N]) {
+    Box b;
+    for (const PlaceholderGroup& g : groups) {
+        b.groups.push_back({g.key, {}});
+        for (const wchar_t* item : g.items)
+            if (item) b.groups.back().items.push_back(item);
+    }
+    return b;
+}
+
 #ifdef _WIN32
 const wchar_t* const kNewLine = L"\r\n";
 #else
@@ -69,9 +112,10 @@ const wchar_t* const kNewLine = L"\n";
 std::wstring RepoUrl() { return L"https://github.com/" + util::FromUtf8(AIMP_DISCORD_RPC_REPO); }
 
 // Forwards the events of one control: changes (check box, edit, combo box, button click) and drawing (paint box).
-class Events final : public IAIMPUIChangeEvents, public IAIMPUIDrawEvents, public IAIMPUIMouseWheelEvents {
+class Events final : public IAIMPUIChangeEvents, public IAIMPUIDrawEvents, public IAIMPUIMouseWheelEvents,
+                     public IAIMPUIMouseEvents {
 public:
-    Events(SettingsPage* page, int id) : page_(page), id_(id) {}
+    Events(SettingsPage* page, int id, bool mouse) : page_(page), id_(id), mouse_(mouse) {}
 
     HRESULT __unknwncall QueryInterface(REFIID riid, LPVOID* ppv) override {
         if (!ppv) return E_POINTER;
@@ -81,6 +125,8 @@ public:
             *ppv = static_cast<IAIMPUIDrawEvents*>(this);
         } else if (SameIID(riid, IID_IAIMPUIMouseWheelEvents)) {   // scroll boxes in AIMP 4 (see BeginScroll)
             *ppv = static_cast<IAIMPUIMouseWheelEvents*>(this);
+        } else if (mouse_ && SameIID(riid, IID_IAIMPUIMouseEvents)) {   // placeholder buttons only
+            *ppv = static_cast<IAIMPUIMouseEvents*>(this);
         } else {
             *ppv = nullptr;
             return E_NOINTERFACE;
@@ -107,11 +153,27 @@ public:
     BOOL WINAPI OnMouseWheel(IUnknown*, INT32 delta, INT32, INT32, WORD) override {
         return page_ && page_->OnWheel(id_, delta) ? 1 : 0;
     }
+    void WINAPI OnMouseDoubleClick(IUnknown*, TAIMPUIMouseButton b, INT32 x, INT32 y, WORD) override {
+        if (page_ && b == umbLeft) page_->OnMouse(id_, 1, x, y);   // a quick second click inserts once more
+    }
+    void WINAPI OnMouseDown(IUnknown*, TAIMPUIMouseButton b, INT32 x, INT32 y, WORD) override {
+        if (page_ && b == umbLeft) page_->OnMouse(id_, 1, x, y);
+    }
+    void WINAPI OnMouseLeave(IUnknown*) override {
+        if (page_) page_->OnMouse(id_, 3, -1, -1);
+    }
+    void WINAPI OnMouseMove(IUnknown*, INT32 x, INT32 y, WORD) override {
+        if (page_) page_->OnMouse(id_, 0, x, y);
+    }
+    void WINAPI OnMouseUp(IUnknown*, TAIMPUIMouseButton b, INT32 x, INT32 y, WORD) override {
+        if (page_ && b == umbLeft) page_->OnMouse(id_, 2, x, y);
+    }
     void Detach() { page_ = nullptr; }
 
 private:
     SettingsPage* page_;
     int id_;
+    bool mouse_;
     std::atomic<long> ref_{1};
 };
 
@@ -274,22 +336,6 @@ std::wstring ChangelogText() {
     return out;
 }
 
-// Read-only list on the Templates tab: every placeholder and function
-std::wstring PlaceholderList() {
-    std::wstring out;
-    for (const std::wstring& line : {
-             T("Tpl.ListBasic") + L" %artist% %title% %album% %albumartist% %genre% %year% %track% %playlist% "
-                                  L"%next% %filename% %ext% %pos% %dur% %percent% %bar% %status%",
-             T("Tpl.ListMore") + L" %comment% %composer% %lyricist% %conductor% %copyright% %mood% %isrc% %key% "
-                                 L"%disc% %disctotal% %tracktotal% %bitrate% %samplerate% %channels% %bitdepth% "
-                                 L"%bpm% %rating% %codec% %filesize% %filesizebytes% %playcount%",
-             T("Tpl.ListFuncs") + L" %IF(A,B,C) %IFEqual(A,B,C,D) %IFGreater(A,B,C,D) %IFGreaterOrEqual(A,B,C,D)",
-             T("Tpl.ListEscape"), T("Tpl.ListBreaks")})
-        out += Wrap(line, 60);
-    while (!out.empty() && (out.back() == L'\n' || out.back() == L'\r')) out.pop_back();
-    return out;
-}
-
 }  // namespace
 
 // ================================================================================ creation
@@ -410,10 +456,10 @@ void SettingsPage::Destroy() {
 
 // ================================================================================ control factory
 
-IAIMPUIControl* SettingsPage::Create(IAIMPUIWinControl* parent, int id, REFIID iid, bool events) {
+IAIMPUIControl* SettingsPage::Create(IAIMPUIWinControl* parent, int id, REFIID iid, bool events, bool mouse) {
     IUnknown* handler = nullptr;
     if (events) {
-        handler = static_cast<IAIMPUIChangeEvents*>(new Events(this, id));
+        handler = static_cast<IAIMPUIChangeEvents*>(new Events(this, id, mouse));
         handlers_.push_back(handler);
     }
     IAIMPString* name = aimp::MakeString(core_, L"c" + std::to_wstring(++nextName_));
@@ -580,6 +626,73 @@ void SettingsPage::Image(IAIMPUIWinControl* p, int id, int x, int y, int w, int 
     Place(c, x, y, w, h);
 }
 
+// A group of placeholder buttons: heading, then the buttons in rows (one paint box, drawn in OnDraw)
+// Tabs for the groups in one row (squeezed if the language makes them too wide), under them the placeholders of the
+// selected group, flowing over the rows.
+float SettingsPage::LayoutChips(ChipBox& b) {
+    b.chips.clear();
+    std::vector<float> widths;
+    float sum = 0;
+    for (const ChipGroup& g : b.groups) {
+        widths.push_back(MeasureChipText(T(g.key)));
+        sum += widths.back();
+    }
+    const float n = (float)b.groups.size(), gaps = kTabGap * (n - 1);
+    const float pad = std::max(8.0f, std::min(kChipPad + 4, (b.width - gaps - sum) / n));   // less padding first
+    sum += pad * n;
+    for (float& w : widths) w += pad;
+    const float squeeze = sum + gaps > b.width ? (b.width - gaps) / sum : 1.0f;   // then cut the texts ("…")
+    float x = 0;
+    for (size_t i = 0; i < b.groups.size(); ++i) {
+        Chip c;
+        c.text = T(b.groups[i].key);
+        c.kind = (int)i == b.group ? 2 : 1;
+        c.x = x;
+        c.w = widths[i] * squeeze;
+        c.h = kChipH;
+        x += c.w + kTabGap;
+        b.chips.push_back(c);
+    }
+    const float first = kChipH + 6;
+    float top = first;
+    x = 0;
+    for (const std::wstring& item : b.groups[(size_t)b.group].items) {
+        Chip c;
+        c.text = item;
+        c.w = std::min(b.width, MeasureChipText(c.text) + kChipPad);
+        if (x > 0 && x + c.w > b.width) {
+            x = 0;
+            top += kChipH + kChipGap;
+        }
+        c.x = x;
+        c.y = top;
+        c.h = kChipH;
+        x += c.w + kChipGap;
+        b.chips.push_back(c);
+    }
+    return top + kChipH + 1;
+}
+
+int SettingsPage::BarHeight(ChipBox& b) {   // as high as the largest group needs
+    float h = 0;
+    for (b.group = 0; b.group < (int)b.groups.size(); ++b.group) h = std::max(h, LayoutChips(b));
+    b.group = 0;
+    return (int)std::ceil(h);
+}
+
+// The bar stays put above the live preview while the fields scroll, so the fields and the placeholders are in
+// view together.
+void SettingsPage::PlaceholderBar(IAIMPUIWinControl* page, int id, ChipBox box, int y, int h) {
+    if (IAIMPUIControl* c = Create(page, id, IID_IAIMPUIPaintBox, true, true)) {
+        kinds_[id] = kPaint;
+        Text(c, AIMPUI_CONTROL_PROPID_HINT, "Tpl.BarHint");
+        box.group = 0;
+        LayoutChips(box);
+        Place(c, 10, y, (int)box.width, h);
+        chips_[id] = box;
+    }
+}
+
 // ================================================================================ value access
 
 IAIMPUIControl* SettingsPage::Item(int id) const {
@@ -691,20 +804,24 @@ void SettingsPage::BuildGeneral(IAIMPUIWinControl* p) {
 }
 
 void SettingsPage::BuildDisplay(IAIMPUIWinControl* page) {
-    // the settings scroll (title link and buttons are below the fold), the live preview stays at the bottom
-    const int boxH = 420 - kPreviewHeight - 6;
+    // the settings scroll (title link and buttons are below the fold), the placeholder bar and the live preview stay
+    // at the bottom
+    ChipBox bar = ChipGroups<ChipBox>(kDisplayGroups);
+    const int barH = BarHeight(bar);
+    const int boxH = 420 - kPreviewHeight - 6 - barH - 6;
     IAIMPUIWinControl* p = BeginScroll(page, IDC_DISPSCROLL, boxH);
     int y = 8;
     Label(p, "Disp.Details", 10, y + 3, 145);   Edit(p, IDC_DETAILS, 160, y, 280);         y += 26;
     Label(p, "Disp.State", 10, y + 3, 145);     Edit(p, IDC_STATE, 160, y, 280);           y += 26;
     Label(p, "Disp.LargeText", 10, y + 3, 145); Edit(p, IDC_LARGETEXT, 160, y, 280);       y += 26;
-    Label(p, "Disp.SmallText", 10, y + 3, 145); Edit(p, IDC_SMALLTEXT, 160, y, 280);       y += 26;
+    Label(p, "Disp.SmallText", 10, y + 3, 145); Edit(p, IDC_SMALLTEXT, 160, y, 280);       y += 28;
+    // how the placeholder bar works (or that the four texts are on the Templates tab)
+    Label(p, "Tpl.Hint", 10, y, 430, 46, IDC_PLACEHOLDERS);                                y += 50;
     Check(p, IDC_SMALLICON, "Disp.SmallIcon", 10, y, 262);
     Check(p, IDC_ADVANCED, "Disp.Advanced", 275, y, 165);                                   y += 24;
     Label(p, "Disp.BarLength", 10, y + 3, 150); Edit(p, IDC_BARLEN, 165, y, 45);
     Label(p, "Disp.Refresh", 220, y + 3, 155);  Edit(p, IDC_REFRESH, 380, y, 60);           y += 26;
-    Label(p, "Disp.Rotate", 10, y + 3, 365);    Edit(p, IDC_ROTATE, 380, y, 60);            y += 26;
-    Label(p, "Disp.Placeholders", 10, y, 430, 46, IDC_PLACEHOLDERS);                                          y += 47;
+    Label(p, "Disp.Rotate", 10, y + 3, 365);    Edit(p, IDC_ROTATE, 380, y, 60);            y += 30;
     // links: the clickable title and the two buttons under the presence (placeholders work in labels and links)
     Check(p, IDC_TITLELINK, "Disp.TitleLink", 10, y, 430);                                  y += 22;
     Check(p, IDC_TITLELINKCUSTOM, "Disp.OwnLink", 28, y + 1, 127);
@@ -713,13 +830,18 @@ void SettingsPage::BuildDisplay(IAIMPUIWinControl* page) {
     Label(p, "Gen.Button1", 28, y + 3, 67); Edit(p, IDC_BTN1LABEL, 100, y, 120); Edit(p, IDC_BTN1URL, 226, y, 214); y += 26;
     Label(p, "Gen.Button2", 28, y + 3, 67); Edit(p, IDC_BTN2LABEL, 100, y, 120); Edit(p, IDC_BTN2URL, 226, y, 214); y += 30;
     EndScroll();
+    const int barY = p == page ? y : boxH + 4;
+    PlaceholderBar(page, IDC_DISPCHIPS, bar, barY, barH);
     // live preview: what Discord will show (drawn in OnDraw)
-    Paint(page, IDC_PREVIEW, 10, p == page ? y : boxH + 4, kPreviewWidth, kPreviewHeight);
+    Paint(page, IDC_PREVIEW, 10, barY + barH + 6, kPreviewWidth, kPreviewHeight);
 }
 
 void SettingsPage::BuildTemplates(IAIMPUIWinControl* page) {
-    // the settings scroll (the automatic presets are below the fold), the live preview stays at the bottom
-    const int boxH = 420 - kPreviewHeight - 6;
+    // the settings scroll (the automatic presets are below the fold), the placeholder bar and the live preview stay
+    // at the bottom
+    ChipBox bar = ChipGroups<ChipBox>(kTemplateGroups);
+    const int barH = BarHeight(bar);
+    const int boxH = 420 - kPreviewHeight - 6 - barH - 6;
     IAIMPUIWinControl* p = BeginScroll(page, IDC_TPLSCROLL, boxH);
     int y = 8;
     // presets: list (items: FillPresets), name, save, delete
@@ -740,8 +862,10 @@ void SettingsPage::BuildTemplates(IAIMPUIWinControl* page) {
     Label(p, "Disp.State", 10, y + 3, 145);     Memo(p, IDC_TPLSTATE, 160, y, 280, 34, true);     y += 38;
     Label(p, "Disp.LargeText", 10, y + 3, 145); Memo(p, IDC_TPLLARGETEXT, 160, y, 280, 34, true); y += 38;
     Label(p, "Disp.SmallText", 10, y + 3, 145); Memo(p, IDC_TPLSMALLTEXT, 160, y, 280, 34, true); y += 38;
-    Memo(p, IDC_TPLLIST, 10, y, 430, 44);                                                   y += 52;
-    SetText(IDC_TPLLIST, PlaceholderList());
+    Label(p, "Tpl.Hint", 10, y, 430, 46, IDC_TPLHINT);                                      y += 46;
+    Label(p, "Tpl.TagsNote", 10, y, 430, 32);                                               y += 34;
+    Label(p, "Tpl.ListEscape", 10, y, 430, 32);                                             y += 32;
+    Label(p, "Tpl.ListBreaks", 10, y, 430, 32);                                             y += 38;
     // automatic presets: "if <field> <contains / equals> <text> -> preset", the first matching rule wins
     Check(p, IDC_AUTOPRESETS, "Tpl.Auto", 10, y, 430);                                      y += 22;
     Label(p, "Tpl.AutoHint", 10, y, 430, 30, IDC_AUTOHINT);                                 y += 32;
@@ -764,7 +888,9 @@ void SettingsPage::BuildTemplates(IAIMPUIWinControl* page) {
     Label(p, nullptr, 10, y, 18, 18, 0);   // AIMP for Linux scrolls only to the top of the last control: a spacer
     if (!anonymous_.empty()) aimp::SetPropString(core_, anonymous_.back(), AIMPUI_LABEL_PROPID_TEXT, L" ");
     EndScroll();
-    Paint(page, IDC_TPLPREVIEW, 10, p == page ? y + 24 : boxH + 4, kPreviewWidth, kPreviewHeight);
+    const int barY = p == page ? y + 24 : boxH + 4;
+    PlaceholderBar(page, IDC_TPLCHIPS, bar, barY, barH);
+    Paint(page, IDC_TPLPREVIEW, 10, barY + barH + 6, kPreviewWidth, kPreviewHeight);
 }
 
 void SettingsPage::BuildCover(IAIMPUIWinControl* p) {
@@ -915,7 +1041,7 @@ void SettingsPage::UpdateEnabled() {
         SetEnabled(IDC_RULEOP + i, rules && !stream);
         SetEnabled(IDC_RULETEXT + i, rules && !stream);
     }
-    SetText(IDC_PLACEHOLDERS, T(adv ? "Disp.PlaceholdersAdvanced" : "Disp.Placeholders"));
+    SetText(IDC_PLACEHOLDERS, T(adv ? "Disp.PlaceholdersAdvanced" : "Tpl.Hint"));
 }
 
 void SettingsPage::ActionInfo(const char* key) {
@@ -1007,6 +1133,8 @@ void SettingsPage::OnControlChanged(int id) {
         default: break;
     }
     if (loading_ || id == IDC_PRESETNAME || id == IDC_DISPSCROLL || id == IDC_TPLSCROLL) return;   // (the name only matters for "Save")
+    for (int t : kDisplayTargets) if (id == t) lastField_[0] = id;   // placeholder buttons insert here
+    for (int t : kTemplateTargets) if (id == t) lastField_[1] = id;
     if (id == IDC_TPLSET) {   // only another view of the texts
         ShowTemplateSet(std::max(0, std::min(2, GetSel(IDC_TPLSET))));
         previewDirty_ = true;
@@ -1223,7 +1351,6 @@ void SettingsPage::Localize() {
     const int lang = GetSel(IDC_LANG);
     FillLanguages(lang > 0 && lang < (int)langCodes_.size() ? langCodes_[lang] : std::wstring());
     FillPresets(GetSel(IDC_PRESET));
-    SetText(IDC_TPLLIST, PlaceholderList());
     SetText(IDC_TPLSETHINT, kSetHints[tplSet_] ? T(kSetHints[tplSet_]) : std::wstring());
     SetText(IDC_ABOUTVERSION, util::Subst(T("About.Version"), AIMP_DISCORD_RPC_VERSION_W, Platform()));
     SetText(IDC_CHANGELOG, ChangelogText());
@@ -1233,6 +1360,10 @@ void SettingsPage::Localize() {
     shownCoverText_.clear();
     shownUpdate_.clear();
     previewDirty_ = true;
+    for (auto& kv : chips_) {   // group tabs in the new language
+        LayoutChips(kv.second);
+        if (IAIMPUIControl* c = Item(kv.first)) c->Invalidate();
+    }
     UpdateEnabled();   // placeholder list of the Display tab (normal / advanced)
     Refresh();
 }
@@ -1464,6 +1595,10 @@ void SettingsPage::Refresh() {
     }
     const int tab = ActiveTab();
     const bool display = tab == kTabDisplay || tab == kTabTemplates || tab < 0;
+    if (tab == kTabDisplay)   // the field with the text cursor: the placeholder buttons insert there
+        for (int t : kDisplayTargets) if (Focused(t)) lastField_[0] = t;
+    if (tab == kTabTemplates)
+        for (int t : kTemplateTargets) if (Focused(t)) lastField_[1] = t;
     bool rotating = false;   // texts with variants switch while the page is open (also for the example track)
     if (display && s.state != PlayState::Playing) {
         Config shown = config::Get();
@@ -1698,6 +1833,12 @@ void SettingsPage::BuildPreview(bool templatesTab) {
 }
 
 void SettingsPage::OnDraw(int id, HCANVAS canvas, const RECT& r) {
+    auto chips = chips_.find(id);
+    if (chips != chips_.end()) {
+        const ChipBox& b = chips->second;
+        DrawChips(canvas, r, b.width, b.chips, b.hover);   // r: pixels (scaled with the DPI), the chips in design units
+        return;
+    }
     if (id == IDC_AVATAR) {
         auto it = images_.find("author");
         if (it != images_.end() && it->second) DrawRoundedImage(canvas, r, it->second, 10);
@@ -1705,4 +1846,115 @@ void SettingsPage::OnDraw(int id, HCANVAS canvas, const RECT& r) {
     }
     BuildPreview(id == IDC_TPLPREVIEW);
     DrawPreview(canvas, r, preview_);
+}
+
+// ================================================================================ placeholder buttons
+
+bool SettingsPage::Focused(int id) const {
+    INT32 v = 0;
+    IAIMPUIControl* c = Item(id);
+    return c && SUCCEEDED(c->GetValueAsInt32(AIMPUI_WINCONTROL_PROPID_FOCUSED, &v)) && v;
+}
+
+// what: 0 = move, 1 = button down, 2 = button up, 3 = mouse left the box. A click (down and up on the same button)
+// inserts its placeholder; the button under the mouse is highlighted.
+void SettingsPage::OnMouse(int id, int what, int x, int y) {
+    auto it = chips_.find(id);
+    if (it == chips_.end()) return;
+    ChipBox& b = it->second;
+    int hit = -1;
+    // The mouse comes in the control's own units (those of its placement), which are not the pixels of the drawing
+    // when AIMP scales the page (e.g. 150 %: drawn 645 wide, mouse 0..430). So map by the placement width.
+    float unit = 1;
+    TAIMPUIControlPlacement pl = {};
+    if (IAIMPUIControl* c = Item(id))
+        if (SUCCEEDED(c->GetPlacement(&pl)) && pl.Bounds.right > pl.Bounds.left)
+            unit = b.width / (float)(pl.Bounds.right - pl.Bounds.left);
+    const float dx = x * unit, dy = y * unit;
+    for (size_t i = 0; what != 3 && i < b.chips.size(); ++i) {   // a little into the gaps counts too
+        const Chip& c = b.chips[i];
+        const float m = c.kind ? 0 : 2;
+        if (dx >= c.x - m && dx < c.x + c.w + m && dy >= c.y - m && dy < c.y + c.h + m) hit = (int)i;
+    }
+    if (what == 1) b.pressed = hit;
+    if (what == 2) {
+        const int pressed = b.pressed;
+        b.pressed = -1;
+        if (hit >= 0 && hit == pressed) {
+            if (!b.chips[(size_t)hit].kind) {
+                InsertPlaceholder(id, b.chips[(size_t)hit].text);
+            } else if (hit != b.group) {   // a group tab: show its placeholders
+                b.group = hit;
+                LayoutChips(b);
+                b.hover = -1;
+            }
+        }
+    }
+    if (what == 3) b.pressed = -1;
+    if (hit != b.hover) {
+        b.hover = hit;
+        if (IAIMPUIControl* c = Item(id)) c->Invalidate();
+    }
+}
+
+// Inserts a placeholder where the text cursor is: in the field that has it, else the one last clicked or typed in,
+// else (at the end) the first field. A space separates it from a word before it and from the next placeholder;
+// a function comes with its commas, the cursor after "(".
+void SettingsPage::InsertPlaceholder(int box, const std::wstring& placeholder) {
+    const bool display = box >= IDC_DISPCHIPS;
+    std::vector<int> targets;
+    if (display) targets.assign(std::begin(kDisplayTargets), std::end(kDisplayTargets));
+    else targets.assign(std::begin(kTemplateTargets), std::end(kTemplateTargets));
+    auto usable = [this](int id) {
+        INT32 enabled = 1;
+        IAIMPUIControl* c = Item(id);
+        return c && (FAILED(c->GetValueAsInt32(AIMPUI_CONTROL_PROPID_ENABLED, &enabled)) || enabled);
+    };
+    int& last = lastField_[display ? 0 : 1];
+    int target = 0;
+    for (int t : targets) if (!target && usable(t) && Focused(t)) target = t;
+    bool atEnd = false;
+    if (!target && last && usable(last)) target = last;
+    for (int t : targets) {
+        if (target || !usable(t)) continue;
+        target = t;
+        atEnd = true;   // never used: the cursor of the field means nothing
+    }
+    IAIMPUIControl* c = Item(target);
+    if (!c) return;
+    last = target;
+
+    const std::wstring text = GetText(target);
+    INT32 start = (INT32)text.size(), length = 0;
+    if (!atEnd) {
+        if (FAILED(c->GetValueAsInt32(AIMPUI_BASEEDIT_PROPID_SELSTART, &start))) start = (INT32)text.size();
+        if (FAILED(c->GetValueAsInt32(AIMPUI_BASEEDIT_PROPID_SELLENGTH, &length))) length = 0;
+    }
+    const size_t from = (size_t)std::max(0, std::min(start, (INT32)text.size()));
+    const size_t to = from + (size_t)std::max(0, std::min(length, (INT32)(text.size() - from)));
+    const wchar_t before = from > 0 ? text[from - 1] : 0, after = to < text.size() ? text[to] : 0;
+
+    std::wstring insert = placeholder;
+    size_t cursor;
+    const size_t paren = placeholder.find(L'(');
+    if (paren != std::wstring::npos) {   // %IF(A,B,C) -> %IF(,,) with the cursor in the brackets
+        insert = placeholder.substr(0, paren + 1) +
+                 std::wstring((size_t)std::count(placeholder.begin(), placeholder.end(), L','), L',') + L")";
+        cursor = paren + 1;
+    } else {
+        cursor = insert.size();
+    }
+    const bool link = IsLinkField(target);
+    if (!link && before && (iswalnum(before) || before == L'%')) {
+        insert = L" " + insert;
+        ++cursor;
+    }
+    if (!link && paren == std::wstring::npos && !iswspace(after) && after != L',' && after != L')') {
+        insert += L" ";
+        ++cursor;
+    }
+    SetText(target, text.substr(0, from) + insert + text.substr(to));
+    c->SetValueAsInt32(AIMPUI_BASEEDIT_PROPID_SELSTART, (INT32)(from + cursor));
+    c->SetValueAsInt32(AIMPUI_BASEEDIT_PROPID_SELLENGTH, 0);
+    OnControlChanged(target);   // like typing (AIMP may report the change itself too: handling it twice is harmless)
 }

@@ -177,6 +177,8 @@ ActivityTexts ComputeTexts(const Config& c, const Snapshot& s, clock_t_::duratio
             auto it = s.track.extra.find(n);
             v[n] = it == s.track.extra.end() ? std::wstring() : it->second;
         }
+        v[L"samplerate"] = tmpl::SampleRateText(v[L"samplerate"]);   // 44100 -> 44.1kHz
+        v[L"bitdepth"] = tmpl::BitDepthText(v[L"bitdepth"]);         // 16 -> 16bit
     }
     auto text = [&](const std::wstring& t) {
         const std::wstring variant = Variant(t, rotateStep, c.advancedTemplates);

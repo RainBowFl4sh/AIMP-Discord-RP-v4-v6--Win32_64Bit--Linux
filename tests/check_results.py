@@ -60,7 +60,7 @@ pkg = open(os.path.join(cache_dir, "aimp_discord_rpc-9.9.9.aimppack"), "rb").rea
 assert pkg[:4] == b"PK\x03\x04" and b"Version: 9.9.9" in pkg, "package content"
 
 ini = text(ini_path)
-for part in ["ConfigVersion=9", "CoverEnabled=1", "Details=%title% [test]", "LargeText=%album% / %playlist%",
+for part in ["ConfigVersion=10", "CoverEnabled=1", "Details=%title% [test]", "LargeText=%album% / %playlist%",
              "ExcludePlaylists=\n", "UpdateLatest=9.9.9", "UpdateOffered=9.9.9", "LastVersion=1.6", "UpdateRestarted=9.9.9"]:
     assert part in ini.replace("\r\n", "\n"), "INI: " + part
 exported = text(exported_path)

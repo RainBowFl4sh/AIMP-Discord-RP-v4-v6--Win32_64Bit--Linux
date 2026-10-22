@@ -148,10 +148,13 @@ title (YouTube search by default, or your own link), **buttons** (the settings s
 activity card and the member list entry exactly as Discord will show them, updated while you type (before "Apply").
 When nothing is playing an example track is shown; when the presence is hidden (paused, filtered, ...) the preview
 says why. Several texts in one field separated by `||` (e.g. First line `%artist% || %title%`) take turns - "Switch
-between texts separated by || every (s)" sets how fast (5 s at least, Discord accepts at most 5 updates in 20 seconds)
+between texts separated by || every (s)" sets how fast (5 s at least, Discord accepts at most 5 updates in 20 seconds).
+Above the live preview a bar shows the placeholders as buttons, in groups (tabs). It stays in place while the
+fields scroll: click into a field, then click placeholders - each one is inserted at the text cursor, with a space
+before and after where needed (the same on the *Templates* tab)
 
 **Advanced templates** (tick on the *Display* tab, off by default) - a *Templates* tab with multi-line fields for
-the four texts, a list of all placeholders and functions, more fields and AIMP's conditions.
+the four texts, all placeholders and functions as clickable buttons in groups, more fields and AIMP's conditions.
 
 - *Texts for*: **Playback**, **Pause** (only shown if the *General* tab shows "Paused") and **Radio / stream**
   (internet radio and other streams). An empty field for pause or radio takes the text for playback. The preview on the
@@ -176,7 +179,8 @@ Line breaks in the template fields are only for a better overview: after a
 |---|---|
 | `%comment%` `%composer%` `%lyricist%` `%conductor%` `%copyright%` `%mood%` `%isrc%` `%key%` | tags |
 | `%disc%` `%disctotal%` `%tracktotal%` | disc number, number of discs / tracks |
-| `%bitrate%` (kbps) `%samplerate%` (Hz) `%channels%` `%bitdepth%` `%bpm%` `%rating%` | numbers |
+| `%bitrate%` (kbps) `%channels%` `%bpm%` `%rating%` | numbers |
+| `%samplerate%` / `%bitdepth%` | with their unit: `44.1kHz`, `48kHz` / `16bit`, `24bit` (conditions compare them as numbers: `%IFGreater(%samplerate%,44100,...)`) |
 | `%codec%` | AIMP's codec name, otherwise the file type (`MP3`, `FLAC`, ...) |
 | `%filesize%` / `%filesizebytes%` | `13.52 MB` / `14176256` |
 | `%playcount%` | AIMP's play count - AIMP keeps it for tracks of its music library |

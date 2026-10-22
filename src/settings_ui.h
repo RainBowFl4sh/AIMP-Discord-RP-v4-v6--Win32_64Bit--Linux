@@ -34,6 +34,7 @@ public:
     void OnControlChanged(int id);             // called by the controls' event handlers
     void OnDraw(int id, HCANVAS canvas, const RECT& r);   // paint boxes: live preview, author picture
     bool OnWheel(int id, int delta);           // mouse wheel over a scroll box (AIMP 4) or a list in one: true = handled
+    void OnMouse(int id, int what, int x, int y);   // placeholder buttons: 0 move, 1 down, 2 up, 3 left
     bool ScrollStep(int box, int delta);       // scrolls a scroll box by about two rows
 
 private:
@@ -66,7 +67,7 @@ private:
     std::wstring AskFile(bool save);
 
     // control factory (coordinates in pixels at 96 DPI, relative to the tab sheet; texts are i18n keys)
-    IAIMPUIControl* Create(IAIMPUIWinControl* parent, int id, REFIID iid, bool events);
+    IAIMPUIControl* Create(IAIMPUIWinControl* parent, int id, REFIID iid, bool events, bool mouse = false);
     void Place(IAIMPUIControl* c, int x, int y, int w, int h);
     void Text(IAIMPUIControl* c, int prop, const char* key);   // sets the text and remembers it for Localize
     void Label(IAIMPUIWinControl* p, const char* key, int x, int y, int w, int h = 18, int id = 0);
@@ -78,6 +79,7 @@ private:
     void Memo(IAIMPUIWinControl* p, int id, int x, int y, int w, int h, bool editable = false);
     void Image(IAIMPUIWinControl* p, int id, int x, int y, int w, int h);
     void Paint(IAIMPUIWinControl* p, int id, int x, int y, int w, int h);
+    void InsertPlaceholder(int box, const std::wstring& placeholder);
     void ActionInfo(const char* key);         // note next to the Advanced tab's buttons, cleared after a while
     IAIMPUIWinControl* BeginScroll(IAIMPUIWinControl* page, int id, int height);   // settings that scroll (or page)
     void EndScroll();
@@ -86,6 +88,7 @@ private:
     IAIMPUIControl* Item(int id) const;
     void SetCheck(int id, bool v);
     bool GetCheck(int id) const;
+    bool Focused(int id) const;
     void SetText(int id, const std::wstring& s);
     std::wstring GetText(int id) const;
     void SetSel(int id, int index);
@@ -135,6 +138,20 @@ private:
     int            tplSet_ = 0;
     int            loadedPreset_ = 0;         // preset loaded into the page and not applied yet (1..10, 0 = none)
     std::wstring   shownRule_;                // text of the "rule in use" line
+
+    // placeholder bars (paint boxes): group tabs, then the placeholders of the selected group (design units)
+    struct ChipGroup { const char* key; std::vector<std::wstring> items; };
+    struct ChipBox {
+        std::vector<ChipGroup> groups;
+        std::vector<Chip> chips;   // the tabs (one per group), then the placeholders of group 'group'
+        float width = 445;
+        int group = 0, hover = -1, pressed = -1;
+    };
+    std::map<int, ChipBox> chips_;
+    float LayoutChips(ChipBox& b);            // fills b.chips, returns the height
+    int BarHeight(ChipBox& b);
+    void PlaceholderBar(IAIMPUIWinControl* page, int id, ChipBox box, int y, int h);
+    int            lastField_[2] = {0, 0};    // field the buttons insert into: Display tab, Templates tab
 
     // scroll boxes: AIMP 4 does not scroll them with the mouse wheel, the page does (rows: bounds of the controls)
     struct ScrollRow { IAIMPUIControl* control; int top, bottom; };

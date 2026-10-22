@@ -68,7 +68,7 @@ python3 "$HERE/check_rotation.py" "$TMP/rotate.frames" "$TMP/rotate.out" || exit
 # once with AIMP's formatter (play count from AIMP's statistics), once without it (music library value)
 "$BUILD/template_test"
 for formatter in 1 0; do
-    printf '[DiscordRPC]\nConfigVersion=9\nCoverEnabled=0\nAdvancedPlaceholders=1\nDetails=%s\nState=%%composer%% - %%bitrate%% kbps\nUpdateCheck=0\n' \
+    printf '[DiscordRPC]\nConfigVersion=9\nCoverEnabled=0\nAdvancedPlaceholders=1\nDetails=%s\nState=%%composer%% - %%bitrate%% kbps\nLargeText=%%samplerate%%Hz / %%bitdepth%% bit\nUpdateCheck=0\n' \
         '%If(%Comment,%Comment,%IFEqual(%PlayCount,1,This song has been played once before,%IFGreater(%PlayCount,1,This song has been played %PlayCount times,%FileSize)))' > "$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini"
     before=$(wc -l < "$TMP/frames.log")
     AIMP_TEST_ADVANCED=1 AIMP_TEST_FORMATTER=$formatter "$BUILD/host_test" "$BUILD/aimp_discord_rpc.so" > "$TMP/advanced.out" \

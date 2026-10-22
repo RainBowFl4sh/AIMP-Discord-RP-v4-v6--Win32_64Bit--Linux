@@ -4,6 +4,7 @@
 #include "aimp_util.h"
 
 #include <string>
+#include <vector>
 
 struct PreviewData {
     bool         hidden = false;          // Discord shows nothing - 'message' tells why
@@ -29,3 +30,15 @@ const int kPreviewWidth = 455, kPreviewHeight = 136;   // size on the page (96 D
 
 void DrawPreview(HCANVAS canvas, const RECT& r, const PreviewData& d);
 void DrawRoundedImage(HCANVAS canvas, const RECT& r, IAIMPImage* img, float radius);   // corners stay transparent
+
+// Placeholder bar above the live preview: group tabs, and the placeholders of the selected group; clicking one
+// inserts it at the text cursor (settings_ui.cpp).
+// Positions in design units (96 DPI); drawn scaled from designW to the paint box.
+struct Chip {
+    std::wstring text;
+    float x = 0, y = 0, w = 0, h = 0;
+    int kind = 0;   // 0 placeholder, 1 group tab, 2 the selected group tab
+};
+const float kChipFont = 11.5f;
+float MeasureChipText(const std::wstring& t);   // width of a button text in design units
+void DrawChips(HCANVAS canvas, const RECT& r, float designW, const std::vector<Chip>& chips, int hover);

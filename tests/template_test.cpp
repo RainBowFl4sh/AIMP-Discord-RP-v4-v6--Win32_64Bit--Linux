@@ -110,6 +110,27 @@ int main() {
     Eq("uses aimp style", tmpl::Uses(L"%IF(%pos,a,b)", {L"pos"}, true) ? L"1" : L"0", L"1");
     Eq("uses prefix", tmpl::Uses(L"%position%", {L"pos"}, true) ? L"1" : L"0", L"0");
 
+    // 1.6.1: sample rate in kHz, bit depth with "bit"; old texts lose the unit they wrote themselves
+    Eq("khz", tmpl::SampleRateText(L"44100"), L"44.1kHz");
+    Eq("khz whole", tmpl::SampleRateText(L"48000"), L"48kHz");
+    Eq("khz 22050", tmpl::SampleRateText(L"22050"), L"22.05kHz");
+    Eq("khz 11025", tmpl::SampleRateText(L"11025"), L"11.025kHz");
+    Eq("khz 192000", tmpl::SampleRateText(L"192000"), L"192kHz");
+    Eq("khz empty", tmpl::SampleRateText(L""), L"");
+    Eq("bit", tmpl::BitDepthText(L"16"), L"16bit");
+    Eq("bit empty", tmpl::BitDepthText(L""), L"");
+    Eq("drop hz", tmpl::DropOldUnits(L"%status% %codec% %samplerate%Hz %bitdepth% bit"),
+       L"%status% %codec% %samplerate% %bitdepth%");
+    Eq("drop variants", tmpl::DropOldUnits(L"%SampleRate% kHz / %bitdepth%-bit / %bitdepth% bits / %samplerate Hz!"),
+       L"%SampleRate% / %bitdepth% / %bitdepth% / %samplerate!");
+    Eq("drop keeps", tmpl::DropOldUnits(L"%bitdepth% bitrate %bitrate% kbps %samplerate% Hzz %samplerates%Hz"),
+       L"%bitdepth% bitrate %bitrate% kbps %samplerate% Hzz %samplerates%Hz");
+    tmpl::Vars q = {{L"samplerate", L"44.1kHz"}, {L"bitdepth", L"24bit"}};
+    Eq("compare khz", ExpandAdvanced(L"%IFGreaterOrEqual(%samplerate%,44100,cd,low)", q), L"cd");
+    Eq("compare khz 2", ExpandAdvanced(L"%IFGreater(%samplerate%,48kHz,hi,no)", q), L"no");
+    Eq("compare bit", ExpandAdvanced(L"%IFGreater(%bitdepth%,16,Hi-Res,CD)", q), L"Hi-Res");
+    Eq("compare equal", ExpandAdvanced(L"%IFEqual(%samplerate%,44100,yes,no)", q), L"yes");
+
     std::printf(g_failed ? "template test: %d FAILED\n" : "template test: all OK\n", g_failed);
     return g_failed ? 1 : 0;
 }

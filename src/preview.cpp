@@ -43,8 +43,8 @@ void AddRound(GraphicsPath& p, float x, float y, float w, float h, float r) {
 
 class Painter {
 public:
-    Painter(HCANVAS dc, const RECT& r) : g_(dc) {
-        s_ = (r.right - r.left) / kDesignW;
+    Painter(HCANVAS dc, const RECT& r, float designW = kDesignW) : g_(dc) {
+        s_ = (r.right - r.left) / designW;
         ox_ = (float)r.left;
         oy_ = (float)r.top;
         g_.SetSmoothingMode(SmoothingModeAntiAlias);
@@ -128,8 +128,8 @@ private:
 
 class Painter {
 public:
-    Painter(HCANVAS cr, const RECT& r) : cr_(cr) {
-        s_ = (r.right - r.left) / kDesignW;
+    Painter(HCANVAS cr, const RECT& r, float designW = kDesignW) : cr_(cr) {
+        s_ = (r.right - r.left) / designW;
         cairo_save(cr_);
         cairo_translate(cr_, r.left, r.top);
         cairo_scale(cr_, s_, s_);
@@ -417,4 +417,52 @@ void DrawRoundedImage(HCANVAS canvas, const RECT& r, IAIMPImage* img, float radi
     img->Draw(cr, r, AIMP_IMAGE_DRAW_STRETCHMODE_FILL | AIMP_IMAGE_DRAW_QUALITY_HIGH, nullptr);
     cairo_restore(cr);
 #endif
+}
+
+// ---------------------------------------------------------------- placeholder buttons (Display / Templates tab)
+
+float MeasureChipText(const std::wstring& t) {
+    const RECT r = {0, 0, 100, 100};
+#ifdef _WIN32
+    if (!CoverResolver::EnsureImaging()) return 7.0f * (float)t.size();
+    HDC dc = GetDC(nullptr);
+    float w = 7.0f * (float)t.size();
+    {
+        Painter p(dc, r, 100);
+        if (p.Valid()) w = p.Measure(t, kChipFont, false);
+    }
+    ReleaseDC(nullptr, dc);
+    return w;
+#else
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+    cairo_t* cr = cairo_create(surface);
+    float w;
+    {
+        Painter p(cr, r, 100);
+        w = p.Measure(t, kChipFont, false);
+    }
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+    return w;
+#endif
+}
+
+void DrawChips(HCANVAS canvas, const RECT& r, float designW, const std::vector<Chip>& chips, int hover) {
+#ifdef _WIN32
+    if (!CoverResolver::EnsureImaging()) return;
+#endif
+    if (!canvas || r.right <= r.left || r.bottom <= r.top) return;
+    Painter p(canvas, r, designW);
+    if (!p.Valid()) return;
+    float tabsEnd = 0, tabsH = 0;   // the tabs sit on one dark strip
+    for (const Chip& c : chips)
+        if (c.kind) tabsEnd = std::max(tabsEnd, c.x + c.w), tabsH = std::max(tabsH, c.y + c.h);
+    if (tabsEnd > 0) p.Round(0, 0, tabsEnd, tabsH, 5, kRow);
+    for (size_t i = 0; i < chips.size(); ++i) {
+        const Chip& c = chips[i];
+        const bool hot = (int)i == hover;
+        if (c.kind == 2 || !c.kind || hot) p.Round(c.x, c.y, c.w, c.h, 4, c.kind == 2 || (hot && !c.kind) ? kBlurple : kButton);
+        Text(p, c.text, c.x + 4, c.y + (c.h - kChipFont * 1.3f) / 2, c.w - 8, kChipFont, false,
+             c.kind == 1 && !hot ? kText : 0xffffff, false, true);
+    }
 }

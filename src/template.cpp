@@ -48,13 +48,20 @@ Func FuncOf(const std::wstring& lowerName) {
     return kNone;
 }
 
+// A number, also with the unit of %samplerate% / %bitdepth% ("44.1kHz" = 44100, "16bit" = 16): comparisons with the
+// bare numbers of older texts keep working
 bool Number(const std::wstring& s, double& v) {
     if (s.empty()) return false;
     std::wstring n = s;
     for (wchar_t& c : n) if (c == L',') c = L'.';   // "1,5" as well as "1.5"
     wchar_t* end = nullptr;
     v = std::wcstod(n.c_str(), &end);
-    return end && *end == 0;
+    if (!end || end == n.c_str()) return false;
+    while (*end == L' ') ++end;
+    const std::wstring unit = util::Lower(end);
+    if (unit == L"khz") v *= 1000;
+    else if (!unit.empty() && unit != L"hz" && unit != L"bit" && unit != L"bits") return false;
+    return true;
 }
 
 // < 0, 0, > 0: numbers by value, other texts alphabetically without case
@@ -217,6 +224,53 @@ bool Uses(const std::wstring& t, std::initializer_list<const wchar_t*> names, bo
         }
     }
     return false;
+}
+
+namespace {
+
+bool Digits(const std::wstring& s) {
+    if (s.empty() || s.size() > 9) return false;
+    for (wchar_t c : s) if (c < L'0' || c > L'9') return false;
+    return true;
+}
+
+}  // namespace
+
+std::wstring SampleRateText(const std::wstring& hz) {
+    if (!Digits(hz)) return hz;
+    const long v = std::wcstol(hz.c_str(), nullptr, 10);
+    std::wstring out = std::to_wstring(v / 1000);
+    std::wstring frac = std::to_wstring(1000 + v % 1000).substr(1);   // three digits, without trailing zeros
+    while (!frac.empty() && frac.back() == L'0') frac.pop_back();
+    if (!frac.empty()) out += L"." + frac;
+    return out + L"kHz";
+}
+
+std::wstring BitDepthText(const std::wstring& bits) { return Digits(bits) ? bits + L"bit" : bits; }
+
+std::wstring DropOldUnits(const std::wstring& t) {
+    static const struct { const wchar_t* name; std::initializer_list<const wchar_t*> units; } kFields[] = {
+        {L"%samplerate", {L"khz", L"hz"}}, {L"%bitdepth", {L"bits", L"bit"}}};
+    std::wstring out = t;
+    for (const auto& f : kFields) {
+        const std::wstring name = f.name;
+        for (size_t at = util::Lower(out).find(name); at != std::wstring::npos;
+             at = util::Lower(out).find(name, at + 1)) {
+            size_t i = at + name.size();
+            if (i < out.size() && IdentChar(out[i])) continue;   // another name (%samplerates...)
+            if (i < out.size() && out[i] == L'%') ++i;
+            size_t u = i;
+            while (u < out.size() && (out[u] == L' ' || out[u] == L'-')) ++u;
+            const std::wstring rest = util::Lower(out.substr(u, 4));
+            for (const wchar_t* unit : f.units) {
+                const size_t n = std::wcslen(unit);
+                if (rest.compare(0, n, unit) != 0 || (u + n < out.size() && Letter(out[u + n]))) continue;
+                out.erase(i, u + n - i);
+                break;
+            }
+        }
+    }
+    return out;
 }
 
 }  // namespace tmpl

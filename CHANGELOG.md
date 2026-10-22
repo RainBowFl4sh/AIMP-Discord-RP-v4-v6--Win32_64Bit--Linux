@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.6.1
+
+### New
+- **Clickable placeholders**: a bar above the live preview (*Display* and *Templates* tab) shows every placeholder
+  as a button. It stays in place while the fields scroll, so the fields and the placeholders are in view together.
+  A click inserts it at the text cursor of the field clicked last, with a space before and after where needed, so
+  a text can be put together with the mouse only. Functions such as `%IF(A,B,C)` come with their commas, the cursor
+  in the brackets
+- The placeholders are sorted into groups (track and album, playback, file and audio, more tags, functions); the
+  tabs of the bar switch between them - no more scrolling in a small box
+
+### Changed
+- `%samplerate%` shows kHz with its unit: `44.1kHz`, `48kHz` (was `44100`)
+- `%bitdepth%` shows its unit: `16bit` (was `16`)
+- Existing texts are adjusted once: a unit written after them (`%samplerate%Hz`, `%samplerate% kHz`,
+  `%bitdepth% bit`) is removed, so it does not appear twice. `%IFGreater` and the other conditions still compare
+  with the old numbers (`%IFGreater(%samplerate%,44100,...)` keeps working)
+
 ## 1.6.0
 
 ### New
