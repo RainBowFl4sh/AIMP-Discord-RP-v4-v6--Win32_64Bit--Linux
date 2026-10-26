@@ -172,6 +172,7 @@ Adv.ImportFailed=%1 does not contain settings of this plugin.
 About.Title=Discord Rich Presence for AIMP
 About.Version=Version %1 – %2
 About.Author=by Fl4sh (RainBowFl4sh on GitHub)
+About.Donate=Support this plugin
 About.GitHub=GitHub page
 About.Releases=All releases
 About.Issues=Report a problem

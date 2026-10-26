@@ -53,7 +53,7 @@ enum Ids {
     IDC_CUSTOMAPP, IDC_CLIENTIDLABEL, IDC_CLIENTID, IDC_OPENPORTAL, IDC_EXPORT, IDC_IMPORT, IDC_OPENFOLDER, IDC_IOINFO,
     // About
     IDC_AVATAR = 800, IDC_ABOUTTITLE, IDC_ABOUTVERSION, IDC_UPDCHECK, IDC_UPDFREQ, IDC_UPDAUTO, IDC_CHECKNOW,
-    IDC_UPDSTATUS, IDC_INSTALL, IDC_NOTES, IDC_PKGFOLDER, IDC_CHANGELOG,
+    IDC_UPDSTATUS, IDC_INSTALL, IDC_NOTES, IDC_PKGFOLDER, IDC_CHANGELOG, IDC_DONATE,
 };
 
 enum Kind { kLabel, kCheck, kEdit, kCombo, kButton, kMemo, kImage, kPaint };
@@ -991,7 +991,10 @@ void SettingsPage::BuildAbout(IAIMPUIWinControl* p) {
         c->SetValueAsInt32(AIMPUI_LABEL_PROPID_TEXTSIZE, 13);
     }
     Label(p, nullptr, 86, 36, 379, 18, IDC_ABOUTVERSION);
-    Link(p, "About.Author", L"https://github.com/RainBowFl4sh", 86, 56, 379);
+    Link(p, "About.Author", L"https://github.com/RainBowFl4sh", 86, 56, 239);
+    Link(p, "About.Donate", L"https://www.paypal.com/donate/?hosted_button_id=TNTR6BR72JZ6E", 330, 56, 135,
+         IDC_DONATE);
+    if (IAIMPUIControl* c = Item(IDC_DONATE)) c->SetValueAsInt32(AIMPUI_LABEL_PROPID_TEXTALIGN, AIMPUI_ALIGN_FAR);   // quiet, at the right edge
     int y = 84;
     Link(p, "About.GitHub", RepoUrl(), 10, y, 140);
     Link(p, "About.Releases", RepoUrl() + L"/releases", 160, y, 140);

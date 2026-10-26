@@ -2,6 +2,10 @@
 
 ## 1.6.2
 
+### Neu
+- Tab *Über*: ein kleiner Link, um das Plugin mit einer Spende zu unterstützen (PayPal) - ganz freiwillig, alles
+  funktioniert auch ohne
+
 ### Geändert
 - **Discord folgt dem Fortschritt in AIMP fast in Echtzeit**: Anfang und Ende des Titels werden in Millisekunden
   statt in ganzen Sekunden gesendet (Discord lag bis zu einer Sekunde daneben, meist dahinter), und die Anzeige wird

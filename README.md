@@ -357,6 +357,12 @@ The presence looks the same for everyone: Discord loads the public cover URL its
 Normally not needed. Tick *Advanced -> Use my own Discord application* and enter its Application ID.
 The application needs the art assets `aimp`, `play` and `pause` (Developer Portal -> Rich Presence -> Art Assets).
 
+## Support
+
+The plugin is free and stays free. If you like it and want to say thanks, you can support it with a donation via
+[PayPal](https://www.paypal.com/donate/?hosted_button_id=TNTR6BR72JZ6E) (also linked on the *About* tab) - completely
+optional. Bug reports and translations on GitHub help just as much.
+
 ## Thanks
 
 - [@TheConfusedlol](https://github.com/TheConfusedlol) for the idea of more placeholders and AIMP's `%IF` functions
@@ -369,7 +375,7 @@ The full list of changes is in [CHANGELOG.md](CHANGELOG.md) (also in [Deutsch](l
 [Русский](langs/changelog.ru.md) and [Українська](langs/changelog.uk.md) - Russian and Ukrainian translated with AI)
 and on the plugin's *About* tab.
 
-**1.6.2** - Discord follows AIMP's progress **almost in real time**: start and end of the track are sent in
+**1.6.2** - Small *Support this plugin* link (PayPal) on the *About* tab. Discord follows AIMP's progress **almost in real time**: start and end of the track are sent in
 milliseconds, and the presence is sent again as soon as AIMP is half a second away from Discord's counter. Clearer hint
 for `\,` `\(` `\)` `\%` `\\` `\|` on the *Templates* tab. Fixed: "c72" under "Switch presets automatically". About
 80 KB smaller plugin files.

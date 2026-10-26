@@ -2,6 +2,10 @@
 
 ## 1.6.2
 
+### New
+- *About* tab: a small link to support the plugin with a donation (PayPal) - completely optional, everything
+  keeps working without it
+
 ### Changed
 - **Discord follows AIMP's progress almost in real time**: the start and end of the track are sent in milliseconds
   instead of whole seconds (Discord was up to a second off, usually behind), and the presence is sent again as soon
