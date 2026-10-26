@@ -31,6 +31,10 @@ const int kPreviewWidth = 455, kPreviewHeight = 136;   // size on the page (96 D
 void DrawPreview(HCANVAS canvas, const RECT& r, const PreviewData& d);
 void DrawRoundedImage(HCANVAS canvas, const RECT& r, IAIMPImage* img, float radius);   // corners stay transparent
 
+// About tab: "boop!" / "pat" over the author's picture, rising from (ax, ay) (parts of the picture, 0..1) by 'rise'
+// (units of a 64 x 64 picture) and fading out; t = 0..1 of the animation.
+void DrawAvatarFx(HCANVAS canvas, const RECT& r, const std::wstring& text, float ax, float ay, float rise, float t);
+
 // Placeholder bar above the live preview: group tabs, and the placeholders of the selected group; clicking one
 // inserts it at the text cursor (settings_ui.cpp).
 // Positions in design units (96 DPI); drawn scaled from designW to the paint box.

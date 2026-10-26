@@ -22,6 +22,10 @@ const uint32_t kPanel = 0x121214, kCard = 0x1f1f23, kRow = 0x232328, kWhite = 0x
                kButton = 0x4e5058;
 
 const float kPi = 3.14159265f;
+// a heart 1 unit wide around (0, 0): start point, then four Bezier curves (control, control, end)
+const float kHeart[13][2] = {{0, -0.22f}, {0, -0.42f}, {-0.5f, -0.47f}, {-0.5f, -0.12f}, {-0.5f, 0.12f},
+                             {-0.22f, 0.28f}, {0, 0.48f}, {0.22f, 0.28f}, {0.5f, 0.12f}, {0.5f, -0.12f},
+                             {0.5f, -0.47f}, {0, -0.42f}, {0, -0.22f}};
 const float kDesignW = 470, kDesignH = 140;   // design units; scaled to the paint box (kPreviewWidth x kPreviewHeight)
 
 // ---------------------------------------------------------------- platform painter (design units, 96 DPI)
@@ -53,20 +57,22 @@ public:
         ok_ = g_.GetLastStatus() == Gdiplus::Ok;
     }
     bool Valid() const { return ok_; }
+    void SetAlpha(float a) { alpha_ = (BYTE)lroundf(255 * std::max(0.0f, std::min(1.0f, a))); }   // for what follows
+    void Smooth() {}   // smooth edges: already (see above)
 
     void Round(float x, float y, float w, float h, float r, uint32_t rgb) {
         GraphicsPath p;
         AddRound(p, X(x), Y(y), w * s_, h * s_, r * s_);
-        SolidBrush b(C(rgb));
+        SolidBrush b(Col(rgb));
         g_.FillPath(&b, &p);
     }
     void Circle(float cx, float cy, float r, uint32_t rgb) {
-        SolidBrush b(C(rgb));
+        SolidBrush b(Col(rgb));
         g_.FillEllipse(&b, X(cx - r), Y(cy - r), 2 * r * s_, 2 * r * s_);
     }
     void Triangle(float x1, float y1, float x2, float y2, float x3, float y3, uint32_t rgb) {
         PointF pt[3] = {PointF(X(x1), Y(y1)), PointF(X(x2), Y(y2)), PointF(X(x3), Y(y3))};
-        SolidBrush b(C(rgb));
+        SolidBrush b(Col(rgb));
         g_.FillPolygon(&b, pt, 3);
     }
     float Measure(const std::wstring& t, float size, bool bold) {
@@ -77,8 +83,33 @@ public:
     }
     void Draw(const std::wstring& t, float x, float y, float size, bool bold, uint32_t rgb) {
         Font f(Family(bold), size * s_, Style(bold), UnitPixel);
-        SolidBrush b(C(rgb));
+        SolidBrush b(Col(rgb));
         g_.DrawString(t.c_str(), (INT)t.size(), &f, PointF(X(x), Y(y)), StringFormat::GenericTypographic(), &b);
+    }
+    // bold text with an outline, and a heart: each one path, so they fade evenly with SetAlpha
+    float BoldWidth(const std::wstring& t, float size) {
+        Font f(Family(false), size * s_, FontStyleBold, UnitPixel);
+        RectF box;
+        g_.MeasureString(t.c_str(), (INT)t.size(), &f, PointF(0, 0), StringFormat::GenericTypographic(), &box);
+        return box.Width / s_;
+    }
+    void Outlined(const std::wstring& t, float x, float y, float size, uint32_t rgb, uint32_t line, float width) {
+        GraphicsPath p;
+        p.AddString(t.c_str(), (INT)t.size(), Family(false), FontStyleBold, size * s_, PointF(X(x), Y(y)),
+                    StringFormat::GenericTypographic());
+        Pen pen(Col(line), width * s_);
+        pen.SetLineJoin(LineJoinRound);
+        g_.DrawPath(&pen, &p);
+        SolidBrush b(Col(rgb));
+        g_.FillPath(&b, &p);
+    }
+    void Heart(float cx, float cy, float size, uint32_t rgb) {
+        PointF pt[13];
+        for (int i = 0; i < 13; ++i) pt[i] = PointF(X(cx + kHeart[i][0] * size), Y(cy + kHeart[i][1] * size));
+        GraphicsPath p;
+        p.AddBeziers(pt, 13);
+        SolidBrush b(Col(rgb));
+        g_.FillPath(&b, &p);
     }
     // AIMP draws the image; rounded corners / circle: the corners are painted over with the background colour
     void Image(IAIMPImage* img, float x, float y, float w, float h, float r, uint32_t bg) {
@@ -95,6 +126,7 @@ public:
     }
 
 private:
+    Color Col(uint32_t rgb) const { return Color(alpha_, (BYTE)(rgb >> 16), (BYTE)(rgb >> 8), (BYTE)rgb); }
     float X(float x) const { return ox_ + x * s_; }
     float Y(float y) const { return oy_ + y * s_; }
     // Discord uses a semi-bold font; "Segoe UI Semibold" is a separate family on Windows
@@ -119,6 +151,7 @@ public:
 private:
     Graphics g_;
     float s_ = 1, ox_ = 0, oy_ = 0;
+    BYTE alpha_ = 255;
     bool ok_ = false, fams_ = false, semiOk_ = false;
     FontFamily* regular_ = nullptr;
     FontFamily* semi_ = nullptr;
@@ -136,6 +169,8 @@ public:
     }
     ~Painter() { cairo_restore(cr_); }
     bool Valid() const { return cr_ != nullptr; }
+    void SetAlpha(float a) { alpha_ = std::max(0.0f, std::min(1.0f, a)); }   // for what follows
+    void Smooth() { cairo_set_antialias(cr_, CAIRO_ANTIALIAS_GRAY); }   // AIMP's canvas has hard edges (restored at the end)
 
     void Round(float x, float y, float w, float h, float r, uint32_t rgb) {
         Path(x, y, w, h, r);
@@ -169,6 +204,29 @@ public:
         cairo_show_text(cr_, util::ToUtf8(t).c_str());
         cairo_new_path(cr_);
     }
+    float BoldWidth(const std::wstring& t, float size) { return Measure(t, size, true); }
+    void Outlined(const std::wstring& t, float x, float y, float size, uint32_t rgb, uint32_t line, float width) {
+        Font(size, true);
+        cairo_font_extents_t fe;
+        cairo_font_extents(cr_, &fe);
+        cairo_new_path(cr_);
+        cairo_move_to(cr_, x, y + fe.ascent);
+        cairo_text_path(cr_, util::ToUtf8(t).c_str());
+        Source(line);
+        cairo_set_line_width(cr_, width);
+        cairo_set_line_join(cr_, CAIRO_LINE_JOIN_ROUND);
+        cairo_stroke_preserve(cr_);
+        Fill(rgb);
+    }
+    void Heart(float cx, float cy, float size, uint32_t rgb) {
+        cairo_new_path(cr_);
+        cairo_move_to(cr_, cx + kHeart[0][0] * size, cy + kHeart[0][1] * size);
+        for (int i = 1; i < 13; i += 3)
+            cairo_curve_to(cr_, cx + kHeart[i][0] * size, cy + kHeart[i][1] * size, cx + kHeart[i + 1][0] * size,
+                           cy + kHeart[i + 1][1] * size, cx + kHeart[i + 2][0] * size, cy + kHeart[i + 2][1] * size);
+        cairo_close_path(cr_);
+        Fill(rgb);
+    }
     void Image(IAIMPImage* img, float x, float y, float w, float h, float r, uint32_t) {
         cairo_save(cr_);
         if (r < 0) {
@@ -199,7 +257,7 @@ private:
         cairo_close_path(cr_);
     }
     void Source(uint32_t rgb) {
-        cairo_set_source_rgb(cr_, ((rgb >> 16) & 255) / 255.0, ((rgb >> 8) & 255) / 255.0, (rgb & 255) / 255.0);
+        cairo_set_source_rgba(cr_, ((rgb >> 16) & 255) / 255.0, ((rgb >> 8) & 255) / 255.0, (rgb & 255) / 255.0, alpha_);
     }
     void Fill(uint32_t rgb) {
         Source(rgb);
@@ -212,7 +270,7 @@ private:
     }
 
     cairo_t* cr_;
-    float s_ = 1;
+    float s_ = 1, alpha_ = 1;
 };
 
 #endif
@@ -417,6 +475,25 @@ void DrawRoundedImage(HCANVAS canvas, const RECT& r, IAIMPImage* img, float radi
     img->Draw(cr, r, AIMP_IMAGE_DRAW_STRETCHMODE_FILL | AIMP_IMAGE_DRAW_QUALITY_HIGH, nullptr);
     cairo_restore(cr);
 #endif
+}
+
+// ---------------------------------------------------------------- About tab: boop / pat on the author's picture
+
+void DrawAvatarFx(HCANVAS canvas, const RECT& r, const std::wstring& text, float ax, float ay, float rise, float t) {
+#ifdef _WIN32
+    if (!CoverResolver::EnsureImaging()) return;
+#endif
+    if (!canvas || r.right <= r.left || r.bottom <= r.top || t < 0 || t >= 1) return;
+    Painter p(canvas, r, 64);
+    if (!p.Valid()) return;
+    p.Smooth();
+    const float size = 9, w = p.BoldWidth(text, size), heart = 5.5f, gap = 1.5f, all = w + gap + heart;
+    const float lift = rise * (1 - (1 - t) * (1 - t));   // fast at first, then slower
+    const float x = std::max(2.0f, std::min(64 - 2 - all, ax * 64 - all / 2));
+    const float y = ay * 64 - size * 0.72f - lift;       // top of the line: the letters are about centred on ay
+    p.SetAlpha(1 - t * t);                                // fades out towards the end
+    p.Outlined(text, x, y, size, 0xffffff, 0x3c145a, 1.5f);
+    p.Heart(x + w + gap + heart / 2, y + size * 0.3f, heart, 0xff5c96);
 }
 
 // ---------------------------------------------------------------- placeholder buttons (Display / Templates tab)

@@ -670,7 +670,8 @@ bool FindPaint(Core* core, Info& out, int nth) {
     return false;
 }
 
-bool RenderPreview(Core* core, const std::string& path, int scale, int nth = 0) {
+// path "": only into 'pixels' (0xRRGGBB, row by row)
+bool RenderPreview(Core* core, const std::string& path, int scale, int nth = 0, std::vector<uint32_t>* pixels = nullptr) {
     Info paint;
     if (!FindPaint(core, paint, nth)) return false;
     const int w = (paint.bounds.right - paint.bounds.left) * scale, h = (paint.bounds.bottom - paint.bounds.top) * scale;
@@ -691,7 +692,9 @@ bool RenderPreview(Core* core, const std::string& path, int scale, int nth = 0) 
     DeleteObject(white);
     bool ok = paint.paint(dc, r);
     GdiFlush();
-    FILE* f = fopen(path.c_str(), "wb");
+    if (pixels)
+        for (int i = 0; i < w * h; ++i) pixels->push_back(static_cast<uint32_t*>(bits)[i] & 0xffffff);
+    FILE* f = path.empty() ? nullptr : fopen(path.c_str(), "wb");
     if (f) {
         BITMAPFILEHEADER fh = {};
         fh.bfType = 0x4D42;
@@ -712,10 +715,16 @@ bool RenderPreview(Core* core, const std::string& path, int scale, int nth = 0) 
     cairo_paint(cr);
     bool ok = paint.paint(cr, r);
     cairo_destroy(cr);
-    cairo_surface_write_to_png(surface, path.c_str());
+    cairo_surface_flush(surface);
+    if (pixels)
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                pixels->push_back(reinterpret_cast<uint32_t*>(cairo_image_surface_get_data(surface) +
+                                                              y * cairo_image_surface_get_stride(surface))[x] & 0xffffff);
+    if (!path.empty()) cairo_surface_write_to_png(surface, path.c_str());
     cairo_surface_destroy(surface);
 #endif
-    printf("preview (%dx%d) written to %s\n", w, h, path.c_str());
+    if (!path.empty()) printf("preview (%dx%d) written to %s\n", w, h, path.c_str());
     return ok;
 }
 
@@ -994,6 +1003,66 @@ bool ClickInRow(Info& i, const std::function<Info()>& get, int y, int index) {
         i = get();
     }
     return false;
+}
+
+// About tab: a click on the head or the nose of the author picture shows "pat" / "boop!" (white, with a pink heart)
+// for about a second; clicks anywhere else, or from one area into the other, show nothing.
+int AvatarFx(Core* core) {
+    Info av;
+    if (!FindPaint(core, av, 2)) return Fail("no paint box for the author picture");
+    const float w = (float)(av.bounds.right - av.bounds.left), h = (float)(av.bounds.bottom - av.bounds.top);
+    auto hearts = [core]() {   // pixels in the heart's pink (the picture of the test is grey-ish, never pink)
+        std::vector<uint32_t> px;
+        if (!RenderPreview(core, "", 2, 2, &px)) return -1;
+        int n = 0;
+        for (uint32_t p : px) {
+            const int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
+            if (r > 200 && g < 150 && b > 100 && b < 210) ++n;
+        }
+        return n;
+    };
+    auto click = [&](float x1, float y1, float x2, float y2) {   // down at (x1, y1), up at (x2, y2): parts of the picture
+        av.mouse(0, (int)(x1 * w), (int)(y1 * h));
+        av.mouse(1, (int)(x1 * w), (int)(y1 * h));
+        av.mouse(0, (int)(x2 * w), (int)(y2 * h));
+        av.mouse(2, (int)(x2 * w), (int)(y2 * h));
+        av.mouse(3, -1, -1);
+    };
+    auto invalidated = [core]() {
+        Info i;
+        return FindPaint(core, i, 2) ? i.invalidated : -1;
+    };
+    if (hearts() != 0) return Fail("word on the picture shown without a click");
+    const float misses[][4] = {{0.05f, 0.05f, 0.05f, 0.05f}, {0.5f, 0.4f, 0.5f, 0.4f},     // corner, eyes (between)
+                               {0.2f, 0.2f, 0.2f, 0.2f},     {0.76f, 0.2f, 0.76f, 0.2f},   // left / right of the head
+                               {0.5f, 0.05f, 0.5f, 0.05f},   {0.28f, 0.64f, 0.28f, 0.64f}, // above, left of the nose
+                               {0.5f, 0.77f, 0.5f, 0.77f},   {0.9f, 0.9f, 0.9f, 0.9f},     // under the nose, corner
+                               {0.48f, 0.64f, 0.48f, 0.2f},  {0.48f, 0.2f, 0.48f, 0.64f}}; // nose -> head, head -> nose
+    for (const auto& m : misses) {
+        const int before = invalidated();
+        click(m[0], m[1], m[2], m[3]);
+        if (invalidated() != before || hearts() != 0) return Fail("word on the picture after a click outside its area");
+    }
+    const float hits[][2] = {{0.48f, 0.2f}, {0.48f, 0.64f}, {0.4f, 0.47f}};   // head, nose, just above the nose
+    for (const auto& spot : hits) {
+        const int before = invalidated();
+        click(spot[0], spot[1], spot[0], spot[1]);
+        const int shown = hearts();
+        if (shown < 20) return Fail("no word on the picture after a click on its area");
+        Wait500ms();
+        Wait500ms();
+        Wait500ms();
+        const int frames = invalidated() - before;
+        if (frames < 8) return Fail("word on the picture does not move");
+        if (hearts() != 0) return Fail("word on the picture still shown after its animation");
+        const int after = invalidated();
+        Wait500ms();
+        Wait500ms();
+        if (invalidated() - after > 1) return Fail("the animation timer still runs");
+        printf("about: picture click at %.2f, %.2f OK (%d / %d)\n", spot[0], spot[1], shown, frames);
+    }
+    printf("about: picture clicks elsewhere OK (%d)\n", (int)(sizeof misses / sizeof misses[0]));
+    return 0;
 }
 
 bool ClickPlaceholder(Core* core, int box, int group, int index) {
@@ -1484,6 +1553,7 @@ int RunTests(Core* core) {
             if (!avatar) Tick(core, 1);
         }
         if (!avatar) return Fail("author picture not drawn on the About tab");
+        if (int r = AvatarFx(core)) return r;
         Info log;
         if (!FindKind(core, "Memo", log, 4) || log.lines->empty()) return Fail("log lines on the Advanced tab");
         printf("settings page: status, cover source, pictures and log OK (%d log lines)\n", (int)log.lines->size());

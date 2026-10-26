@@ -11,6 +11,11 @@
 #include <map>
 #include <string>
 #include <vector>
+#ifndef _WIN32
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#endif
 
 #include "config.h"
 #include "presence.h"
@@ -34,7 +39,8 @@ public:
     void OnControlChanged(int id);             // called by the controls' event handlers
     void OnDraw(int id, HCANVAS canvas, const RECT& r);   // paint boxes: live preview, author picture
     bool OnWheel(int id, int delta);           // mouse wheel over a scroll box (AIMP 4) or a list in one: true = handled
-    void OnMouse(int id, int what, int x, int y);   // placeholder buttons: 0 move, 1 down, 2 up, 3 left
+    void OnMouse(int id, int what, int x, int y);   // placeholder buttons, author picture: 0 move, 1 down, 2 up, 3 left
+    void TickFx();                             // author picture: next frame of "boop!" / "pat" (while one runs)
     bool ScrollStep(int box, int delta);       // scrolls a scroll box by about two rows
 
 private:
@@ -78,7 +84,7 @@ private:
     void Button(IAIMPUIWinControl* p, int id, const char* key, int x, int y, int w);
     void Memo(IAIMPUIWinControl* p, int id, int x, int y, int w, int h, bool editable = false);
     void Image(IAIMPUIWinControl* p, int id, int x, int y, int w, int h);
-    void Paint(IAIMPUIWinControl* p, int id, int x, int y, int w, int h);
+    void Paint(IAIMPUIWinControl* p, int id, int x, int y, int w, int h, bool mouse = false);
     void InsertPlaceholder(int box, const std::wstring& placeholder);
     void ActionInfo(const char* key);         // note next to the Advanced tab's buttons, cleared after a while
     IAIMPUIWinControl* BeginScroll(IAIMPUIWinControl* page, int id, int height);   // settings that scroll (or page)
@@ -152,6 +158,21 @@ private:
     int BarHeight(ChipBox& b);
     void PlaceholderBar(IAIMPUIWinControl* page, int id, ChipBox box, int y, int h);
     int            lastField_[2] = {0, 0};    // field the buttons insert into: Display tab, Templates tab
+
+    // About tab: "boop!" / "pat" over the author's picture (kAvatarSpots in settings_ui.cpp)
+    void AvatarMouse(int what, int x, int y);
+    void StartFx();
+    void StopFx(bool quit);
+    int            fxSpot_ = -1, fxPressed_ = -1;   // area whose word is shown / where the button went down (-1 = none)
+    uint64_t       fxStart_ = 0;              // TickMs of the click
+#ifdef _WIN32
+    UINT_PTR       fxTimer_ = 0;
+#else
+    std::thread    fxThread_;                 // started with the first click, ends with the page
+    std::mutex     fxMu_;
+    std::condition_variable fxCv_;
+    bool           fxRun_ = false, fxQuit_ = false;
+#endif
 
     // scroll boxes: AIMP 4 does not scroll them with the mouse wheel, the page does (rows: bounds of the controls)
     struct ScrollRow { IAIMPUIControl* control; int top, bottom; };

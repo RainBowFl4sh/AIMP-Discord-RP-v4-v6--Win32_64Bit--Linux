@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.6.2
+
+### Changed
+- **Discord follows AIMP's progress almost in real time**: the start and end of the track are sent in milliseconds
+  instead of whole seconds (Discord was up to a second off, usually behind), and the presence is sent again as soon
+  as AIMP is half a second away from what Discord counts (buffering, small seeks)
+- *Templates* tab: the hint about `\,` `\(` `\)` `\%` explains every character and has an example; `\\` and `\|`
+  are listed as well
+
+### Fixed
+- *Templates* tab: "c72" (an internal name) was shown under "Switch presets automatically" until the box was clicked
+
+### Under the hood
+- The built-in translations and changelogs are stored compressed: the plugin file is about 80 KB smaller
+
 ## 1.6.1
 
 ### New

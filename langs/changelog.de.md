@@ -1,5 +1,21 @@
 # Änderungen
 
+## 1.6.2
+
+### Geändert
+- **Discord folgt dem Fortschritt in AIMP fast in Echtzeit**: Anfang und Ende des Titels werden in Millisekunden
+  statt in ganzen Sekunden gesendet (Discord lag bis zu einer Sekunde daneben, meist dahinter), und die Anzeige wird
+  neu gesendet, sobald AIMP eine halbe Sekunde von Discords Zähler abweicht (Puffern, kleine Sprünge)
+- Tab *Vorlagen*: Der Hinweis zu `\,` `\(` `\)` `\%` erklärt jedes Zeichen und hat ein Beispiel; `\\` und `\|`
+  stehen jetzt auch dabei
+
+### Behoben
+- Tab *Vorlagen*: Unter „Presets automatisch wechseln“ stand „c72“ (ein interner Name), bis man das Kästchen
+  angeklickt hat
+
+### Unter der Haube
+- Die eingebauten Übersetzungen und Changelogs sind komprimiert gespeichert: Die Plugin-Datei ist etwa 80 KB kleiner
+
 ## 1.6.1
 
 ### Neu

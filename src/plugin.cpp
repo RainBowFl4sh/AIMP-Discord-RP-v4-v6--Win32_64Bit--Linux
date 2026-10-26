@@ -263,6 +263,10 @@ private:
     uint64_t lastId_ = 0;
     double lastPos_ = 0;
     std::chrono::steady_clock::time_point lastPoll_ = std::chrono::steady_clock::now();
+    // what Discord counts on from: the position handed to the worker last
+    PlayState sentState_ = PlayState::Stopped;
+    double sentPos_ = 0;
+    std::chrono::steady_clock::time_point sentStamp_{};
     bool forcePush_ = true;
     // the track's tags are read again only when something may have changed (a dozen COM calls each time)
     TrackInfo lastTrack_;
@@ -870,6 +874,11 @@ void Plugin::Poll() {
         }
         if (dur <= 0) dur = lastInfoDur_;
         if (dur <= 0) dur = ReadReal(AIMP_MSG_PROPERTY_PLAYER_DURATION);
+        // Discord counts on from the position sent last: send again as soon as AIMP is half a second away from it
+        // (buffering, small seeks add up unnoticed from one poll to the next). The tags are not read for this.
+        if (!push && ps == PlayState::Playing && sentState_ == PlayState::Playing &&
+            std::fabs(pos - (sentPos_ + duration<double>(now - sentStamp_).count())) > 0.5)
+            push = true;
 
         s.position = pos;
         s.duration = dur;
@@ -882,6 +891,9 @@ void Plugin::Poll() {
     lastPoll_ = now;
     if (push) {
         forcePush_ = false;
+        sentState_ = ps;
+        sentPos_ = s.position;
+        sentStamp_ = now;
         Worker().Submit(s);
     }
 }

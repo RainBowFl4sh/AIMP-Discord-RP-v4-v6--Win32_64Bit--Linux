@@ -10,6 +10,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 
 
 def serve(conn, log):
@@ -31,7 +32,7 @@ def serve(conn, log):
             op, length = struct.unpack("<II", recv_exact(8))
             payload = json.loads(recv_exact(length) or b"{}")
             with open(log, "a") as f:
-                f.write(json.dumps({"op": op, "data": payload}) + "\n")
+                f.write(json.dumps({"op": op, "data": payload, "t": round(time.time(), 3)}) + "\n")
             if op == 0:  # handshake
                 send(1, {"cmd": "DISPATCH", "evt": "READY",
                          "data": {"v": 1, "user": {"id": "1", "username": "tester",

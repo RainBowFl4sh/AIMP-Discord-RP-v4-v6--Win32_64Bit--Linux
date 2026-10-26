@@ -1,4 +1,4 @@
-# AIMP Discord Rich Presence 1.6.0 for AIMP 4, 5 and 6 (Windows x86 / x64 + Linux)
+# AIMP Discord Rich Presence 1.6.2 for AIMP 4, 5 and 6 (Windows x86 / x64 + Linux)
 
 Discord Rich Presence plugin for AIMP 4, 5 and 6 (AIMP 3 with limitations) with its own settings tab inside AIMP's preferences -
 on Windows **and** Linux, in English, German, Russian and Ukrainian, with a live preview, update check and
@@ -216,11 +216,11 @@ language (automatic = AIMP's language), own Discord application, export / import
 <table>
   <tr>
     <td width="50%"><b>General</b><br><img src="docs/screenshots/settings-general-v1.5.png" alt="General tab"></td>
-    <td width="50%"><b>Display</b> - clickable title, buttons and the live preview<br><img src="docs/screenshots/settings-display-v1.6.png" alt="Display tab with buttons and the live preview"></td>
+    <td width="50%"><b>Hot keys</b> in AIMP - display on / off and the 10 presets<br><img src="docs/screenshots/settings-hotkeys-v1.6.png" alt="AIMP hot keys with the Discord Rich Presence group"></td>
   </tr>
   <tr>
-    <td><b>Templates</b> - presets and own texts for playback, pause and radio<br><img src="docs/screenshots/settings-templates-v1.6.png" alt="Templates tab"></td>
-    <td><b>Hot keys</b> in AIMP - display on / off and the 10 presets<br><img src="docs/screenshots/settings-hotkeys-v1.6.png" alt="AIMP hot keys with the Discord Rich Presence group"></td>
+    <td valign="top"><b>Display</b> - texts, clickable title, buttons, the placeholder bar and the live preview<br><img src="docs/screenshots/settings-display-v1.6.2.png" alt="Display tab with texts, buttons, the placeholder bar and the live preview"></td>
+    <td valign="top"><b>Templates</b> - presets, own texts for playback, pause and radio, rules for switching presets<br><img src="docs/screenshots/settings-templates-v1.6.2.png" alt="Templates tab with presets, texts, rules and the placeholder bar"></td>
   </tr>
 </table>
 
@@ -368,6 +368,15 @@ The application needs the art assets `aimp`, `play` and `pause` (Developer Porta
 The full list of changes is in [CHANGELOG.md](CHANGELOG.md) (also in [Deutsch](langs/changelog.de.md),
 [Русский](langs/changelog.ru.md) and [Українська](langs/changelog.uk.md) - Russian and Ukrainian translated with AI)
 and on the plugin's *About* tab.
+
+**1.6.2** - Discord follows AIMP's progress **almost in real time**: start and end of the track are sent in
+milliseconds, and the presence is sent again as soon as AIMP is half a second away from Discord's counter. Clearer hint
+for `\,` `\(` `\)` `\%` `\\` `\|` on the *Templates* tab. Fixed: "c72" under "Switch presets automatically". About
+80 KB smaller plugin files.
+
+**1.6.1** - **Clickable placeholders**: a bar above the live preview shows all placeholders as buttons in groups; a
+click inserts one at the text cursor. `%samplerate%` shows `44.1kHz`, `%bitdepth%` shows `16bit` (existing texts are
+adjusted once).
 
 **1.6.0** - **Advanced templates** (optional): more fields like `%comment%`, `%composer%`, `%playcount%`,
 `%filesize%` and AIMP's conditions `%IF`, `%IFEqual`, `%IFGreater`, `%IFGreaterOrEqual` in multi-line fields on a new

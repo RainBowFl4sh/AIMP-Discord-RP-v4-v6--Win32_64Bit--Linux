@@ -390,10 +390,11 @@ bool PresenceWorker::BuildActivity(const Config& c, const Snapshot& s, std::stri
     }
 
     // progress bar (Listening) or elapsed counter (Playing)
+    // in milliseconds: whole seconds put Discord up to a second away from AIMP's position
     if (c.showTimestamps && t.playing) {
-        long long start = (long long)time(nullptr) - (long long)t.pos;
+        const long long start = (long long)util::UnixTimeMs() - (long long)(t.pos * 1000.0 + 0.5);
         a += ",\"timestamps\":{\"start\":" + std::to_string(start);
-        if (t.dur > 0) a += ",\"end\":" + std::to_string(start + (long long)(t.dur + 0.5));
+        if (t.dur > 0) a += ",\"end\":" + std::to_string(start + (long long)(t.dur * 1000.0 + 0.5));
         a += "}";
     }
 

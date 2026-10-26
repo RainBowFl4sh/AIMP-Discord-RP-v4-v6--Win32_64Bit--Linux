@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cwchar>
 #include <cwctype>
@@ -111,6 +112,21 @@ const wchar_t* const kNewLine = L"\n";
 
 std::wstring RepoUrl() { return L"https://github.com/" + util::FromUtf8(AIMP_DISCORD_RPC_REPO); }
 
+// About tab: a click on the head of the author's picture says "pat", one on the nose "boop!" (areas as parts of the
+// picture, the nose with some room around it, mostly above; they do not overlap, anywhere else nothing happens).
+// The word rises from (ax, ay) by 'rise' and fades.
+struct AvatarSpot { float x0, y0, x1, y1; const wchar_t* text; float ax, ay, rise; };
+const AvatarSpot kAvatarSpots[] = {{0.22f, 0.075f, 0.74f, 0.36f, L"pat", 0.48f, 0.30f, 10},
+                                   {0.30f, 0.44f, 0.66f, 0.75f, L"boop!", 0.485f, 0.64f, 16}};
+const uint64_t kFxMs = 1100;   // length of the animation
+
+#ifdef _WIN32
+SettingsPage* g_fxPage = nullptr;   // the page whose animation runs (its timer is a thread timer: no window of ours)
+void CALLBACK FxTimer(HWND, UINT, UINT_PTR, DWORD) {
+    if (g_fxPage) g_fxPage->TickFx();
+}
+#endif
+
 // Forwards the events of one control: changes (check box, edit, combo box, button click) and drawing (paint box).
 class Events final : public IAIMPUIChangeEvents, public IAIMPUIDrawEvents, public IAIMPUIMouseWheelEvents,
                      public IAIMPUIMouseEvents {
@@ -125,7 +141,7 @@ public:
             *ppv = static_cast<IAIMPUIDrawEvents*>(this);
         } else if (SameIID(riid, IID_IAIMPUIMouseWheelEvents)) {   // scroll boxes in AIMP 4 (see BeginScroll)
             *ppv = static_cast<IAIMPUIMouseWheelEvents*>(this);
-        } else if (mouse_ && SameIID(riid, IID_IAIMPUIMouseEvents)) {   // placeholder buttons only
+        } else if (mouse_ && SameIID(riid, IID_IAIMPUIMouseEvents)) {   // placeholder buttons, author picture
             *ppv = static_cast<IAIMPUIMouseEvents*>(this);
         } else {
             *ppv = nullptr;
@@ -420,6 +436,7 @@ bool SettingsPage::Build(HWND parent) {
 }
 
 void SettingsPage::Destroy() {
+    StopFx(true);
     for (IUnknown* h : handlers_) {
         static_cast<Events*>(static_cast<IAIMPUIChangeEvents*>(h))->Detach();
         h->Release();
@@ -548,7 +565,8 @@ void SettingsPage::Label(IAIMPUIWinControl* p, const char* key, int x, int y, in
     if (id) kinds_[id] = kLabel;
     c->SetValueAsInt32(AIMPUI_LABEL_PROPID_AUTOSIZE, 0);
     c->SetValueAsInt32(AIMPUI_LABEL_PROPID_WORDWRAP, h > 20 ? 1 : 0);
-    Text(c, AIMPUI_LABEL_PROPID_TEXT, key);
+    if (key) Text(c, AIMPUI_LABEL_PROPID_TEXT, key);
+    else aimp::SetPropString(core_, c, AIMPUI_LABEL_PROPID_TEXT, std::wstring());   // AIMP shows the control's name ("c72") otherwise
     Place(c, x, y, w, h);
 }
 
@@ -610,8 +628,8 @@ void SettingsPage::Memo(IAIMPUIWinControl* p, int id, int x, int y, int w, int h
     Place(c, x, y, w, h);
 }
 
-void SettingsPage::Paint(IAIMPUIWinControl* p, int id, int x, int y, int w, int h) {
-    if (IAIMPUIControl* c = Create(p, id, IID_IAIMPUIPaintBox, true)) {
+void SettingsPage::Paint(IAIMPUIWinControl* p, int id, int x, int y, int w, int h, bool mouse) {
+    if (IAIMPUIControl* c = Create(p, id, IID_IAIMPUIPaintBox, true, mouse)) {
         kinds_[id] = kPaint;
         Place(c, x, y, w, h);
     }
@@ -864,7 +882,7 @@ void SettingsPage::BuildTemplates(IAIMPUIWinControl* page) {
     Label(p, "Disp.SmallText", 10, y + 3, 145); Memo(p, IDC_TPLSMALLTEXT, 160, y, 280, 34, true); y += 38;
     Label(p, "Tpl.Hint", 10, y, 430, 46, IDC_TPLHINT);                                      y += 46;
     Label(p, "Tpl.TagsNote", 10, y, 430, 32);                                               y += 34;
-    Label(p, "Tpl.ListEscape", 10, y, 430, 32);                                             y += 32;
+    Label(p, "Tpl.ListEscape", 10, y, 430, 64);                                             y += 64;
     Label(p, "Tpl.ListBreaks", 10, y, 430, 32);                                             y += 38;
     // automatic presets: "if <field> <contains / equals> <text> -> preset", the first matching rule wins
     Check(p, IDC_AUTOPRESETS, "Tpl.Auto", 10, y, 430);                                      y += 22;
@@ -965,7 +983,7 @@ void SettingsPage::BuildAdvanced(IAIMPUIWinControl* p) {
 }
 
 void SettingsPage::BuildAbout(IAIMPUIWinControl* p) {
-    Paint(p, IDC_AVATAR, 10, 8, 64, 64);   // drawn with rounded corners (OnDraw)
+    Paint(p, IDC_AVATAR, 10, 8, 64, 64, true);   // drawn with rounded corners (OnDraw), "boop!" / "pat" (AvatarMouse)
     Label(p, "About.Title", 86, 8, 379, 26, IDC_ABOUTTITLE);
     if (IAIMPUIControl* c = Item(IDC_ABOUTTITLE)) {
         c->SetValueAsInt32(AIMPUI_LABEL_PROPID_WORDWRAP, 0);
@@ -1569,6 +1587,7 @@ void SettingsPage::ImportSettings() {
 
 void SettingsPage::Refresh() {
     if (!form_) return;
+    TickFx();
     const PresenceStatus st = Worker().Status();
     const Snapshot s = Worker().LastSnapshot();
     const Config c = config::Get();
@@ -1841,7 +1860,12 @@ void SettingsPage::OnDraw(int id, HCANVAS canvas, const RECT& r) {
     }
     if (id == IDC_AVATAR) {
         auto it = images_.find("author");
-        if (it != images_.end() && it->second) DrawRoundedImage(canvas, r, it->second, 10);
+        if (it == images_.end() || !it->second) return;
+        DrawRoundedImage(canvas, r, it->second, 10);
+        if (fxSpot_ >= 0) {
+            const AvatarSpot& a = kAvatarSpots[fxSpot_];
+            DrawAvatarFx(canvas, r, a.text, a.ax, a.ay, a.rise, (float)(util::TickMs() - fxStart_) / kFxMs);
+        }
         return;
     }
     BuildPreview(id == IDC_TPLPREVIEW);
@@ -1859,6 +1883,10 @@ bool SettingsPage::Focused(int id) const {
 // what: 0 = move, 1 = button down, 2 = button up, 3 = mouse left the box. A click (down and up on the same button)
 // inserts its placeholder; the button under the mouse is highlighted.
 void SettingsPage::OnMouse(int id, int what, int x, int y) {
+    if (id == IDC_AVATAR) {
+        AvatarMouse(what, x, y);
+        return;
+    }
     auto it = chips_.find(id);
     if (it == chips_.end()) return;
     ChipBox& b = it->second;
@@ -1895,6 +1923,91 @@ void SettingsPage::OnMouse(int id, int what, int x, int y) {
         b.hover = hit;
         if (IAIMPUIControl* c = Item(id)) c->Invalidate();
     }
+}
+
+// ================================================================================ About tab: boop / pat
+
+// A click (down and up in the same area) plays the area's word, from the start again on every click.
+void SettingsPage::AvatarMouse(int what, int x, int y) {
+    auto img = images_.find("author");
+    IAIMPUIControl* c = Item(IDC_AVATAR);
+    if (img == images_.end() || !img->second || !c) return;   // nothing to click on before the picture is there
+    int hit = -1;
+    TAIMPUIControlPlacement pl = {};   // the mouse comes in the units of the placement (see OnMouse)
+    const int w = SUCCEEDED(c->GetPlacement(&pl)) ? pl.Bounds.right - pl.Bounds.left : 0;
+    const int h = pl.Bounds.bottom - pl.Bounds.top;
+    if (what != 3 && w > 0 && h > 0) {
+        const float fx = x / (float)w, fy = y / (float)h;
+        for (int i = 0; i < (int)std::size(kAvatarSpots); ++i) {
+            const AvatarSpot& a = kAvatarSpots[i];
+            if (fx >= a.x0 && fx < a.x1 && fy >= a.y0 && fy < a.y1) hit = i;
+        }
+    }
+    if (what == 1) fxPressed_ = hit;
+    if (what == 2 && hit >= 0 && hit == fxPressed_) {
+        fxSpot_ = hit;
+        fxStart_ = util::TickMs();
+        StartFx();
+        c->Invalidate();
+    }
+    if (what >= 2) fxPressed_ = -1;
+}
+
+// next frame; the last one shows the picture alone again
+void SettingsPage::TickFx() {
+    if (fxSpot_ < 0) return;
+    if (util::TickMs() - fxStart_ >= kFxMs) {
+        fxSpot_ = -1;
+        StopFx(false);
+    }
+    if (IAIMPUIControl* c = Item(IDC_AVATAR)) c->Invalidate();
+}
+
+// about 30 frames a second: Windows a timer on this (the main) thread, Linux a thread that asks AIMP's main thread
+// for a refresh (Refresh calls TickFx)
+void SettingsPage::StartFx() {
+#ifdef _WIN32
+    g_fxPage = this;
+    if (!fxTimer_) fxTimer_ = SetTimer(nullptr, 0, 30, FxTimer);
+#else
+    {
+        std::lock_guard<std::mutex> lk(fxMu_);
+        fxRun_ = true;
+    }
+    fxCv_.notify_one();
+    if (!fxThread_.joinable())
+        fxThread_ = std::thread([this] {
+            std::unique_lock<std::mutex> lk(fxMu_);
+            while (!fxQuit_) {
+                if (!fxRun_) {
+                    fxCv_.wait(lk);
+                    continue;
+                }
+                fxCv_.wait_for(lk, std::chrono::milliseconds(30));
+                if (fxRun_ && !fxQuit_) {
+                    lk.unlock();
+                    NotifyUi();
+                    lk.lock();
+                }
+            }
+        });
+#endif
+}
+
+void SettingsPage::StopFx(bool quit) {   // quit: the page goes away
+#ifdef _WIN32
+    if (fxTimer_) KillTimer(nullptr, fxTimer_);
+    fxTimer_ = 0;
+    if (g_fxPage == this) g_fxPage = nullptr;
+#else
+    {
+        std::lock_guard<std::mutex> lk(fxMu_);
+        fxRun_ = false;
+        fxQuit_ = fxQuit_ || quit;
+    }
+    fxCv_.notify_one();
+    if (quit && fxThread_.joinable()) fxThread_.join();
+#endif
 }
 
 // Inserts a placeholder where the text cursor is: in the field that has it, else the one last clicked or typed in,

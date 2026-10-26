@@ -84,6 +84,7 @@ void     MakeDir(const std::wstring& path);
 std::wstring GetEnv(const wchar_t* name);
 uint32_t ProcessId();
 int64_t  UnixTime();
+int64_t  UnixTimeMs();                                     // the same in milliseconds (Discord timestamps)
 std::wstring FormatDateTime(int64_t unixTime);           // local time, "YYYY-MM-DD HH:MM"
 std::wstring FormatClock(int64_t unixTime);              // local time, "HH:MM:SS"
 bool     UnderWine();                                      // Windows build running in Wine

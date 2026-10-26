@@ -29,7 +29,8 @@ assert shown, "presence was never set"
 a = shown[0]
 assert a["details"] == "Bohemian Rhapsody – Remastered [test]", a
 assert a["state"] == "by Queen", a
-assert a["timestamps"]["end"] - a["timestamps"]["start"] == 354, a
+# milliseconds (1.6.2): whole seconds put Discord up to a second away from AIMP's position
+assert a["timestamps"]["start"] > 10**12 and a["timestamps"]["end"] - a["timestamps"]["start"] == 354000, a
 assert a["assets"]["large_text"] == "A Night at the Opera / Test Mix", a
 assert a["assets"]["small_image"] == "play", a
 assert a["details_url"].startswith("https://www.youtube.com/results?search_query=Queen+Bohemian"), a

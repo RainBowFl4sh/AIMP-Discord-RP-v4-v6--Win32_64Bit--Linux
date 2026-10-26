@@ -709,6 +709,10 @@ std::wstring ModuleDir() {
 }
 
 int64_t UnixTime() { return (int64_t)time(nullptr); }
+int64_t UnixTimeMs() {
+    using namespace std::chrono;
+    return (int64_t)duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
 
 std::wstring FormatDateTime(int64_t unixTime) {
     time_t t = (time_t)unixTime;
