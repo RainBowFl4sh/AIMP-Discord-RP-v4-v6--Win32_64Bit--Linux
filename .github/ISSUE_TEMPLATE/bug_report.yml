@@ -1,0 +1,54 @@
+name: Bug report
+description: Something does not work as it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please check first that you use the **latest version** (*About* tab -> update check).
+        Discord **in the browser** cannot show Rich Presence - only the desktop app (or Vesktop) can.
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: Shown on the *About* tab
+      placeholder: "1.6.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: AIMP edition
+      options:
+        - Windows 64-bit
+        - Windows 32-bit
+        - Linux (native AIMP for Linux)
+        - Windows AIMP in Wine
+        - AIMP 3
+    validations:
+      required: true
+  - type: input
+    id: aimp-version
+    attributes:
+      label: AIMP version
+      placeholder: "6.00.3093 Beta 7"
+    validations:
+      required: true
+  - type: input
+    id: discord
+    attributes:
+      label: Discord client
+      placeholder: "Discord desktop app / Flatpak / Snap / Vesktop / Canary ..."
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead? Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: "*Advanced* tab -> recent log (copy the lines around the problem)"
+      render: text
