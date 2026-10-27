@@ -1,0 +1,32 @@
+name: Translation
+description: A new language or corrections for an existing one
+labels: ["translation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        How to translate: see [Contributing -> Translations](../blob/main/CONTRIBUTING.md#translations).
+        You can also open a pull request with the `.lng` file in `langs/` instead.
+  - type: input
+    id: language
+    attributes:
+      label: Language
+      placeholder: "Polish"
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: New language or correction?
+      options:
+        - New language
+        - Correction of an existing language
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Attach the `.lng` file (drag it in here) or list the texts to change.
+    validations:
+      required: true
