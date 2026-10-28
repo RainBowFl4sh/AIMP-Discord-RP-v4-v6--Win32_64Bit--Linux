@@ -240,9 +240,11 @@ private:
 #endif
     void RegisterActions();
     double ReadReal(int message);
+    double ReadRate();
     int ReadState();
     bool ReadTrack(TrackInfo& t, double& duration);
     std::wstring ReadNext();   // the track AIMP plays next, "" = none / unknown
+    std::shared_ptr<const std::vector<uint8_t>> ReadArt(const std::wstring& fileName);
     void ReadExtra(IAIMPFileInfo* info, IAIMPPlaylistItem* item, TrackInfo& t);
     std::wstring FormatMacro(IAIMPFileInfo* info, const wchar_t* macro);
 
@@ -266,7 +268,11 @@ private:
     // what Discord counts on from: the position handed to the worker last
     PlayState sentState_ = PlayState::Stopped;
     double sentPos_ = 0;
+    double sentRate_ = 1;
     std::chrono::steady_clock::time_point sentStamp_{};
+    // corrections because AIMP drifted away from Discord: the first ones at once, then at most every 15 s
+    int driftFixes_ = 0;
+    std::chrono::steady_clock::time_point lastDriftFix_{};
     bool forcePush_ = true;
     // the track's tags are read again only when something may have changed (a dozen COM calls each time)
     TrackInfo lastTrack_;
@@ -691,6 +697,16 @@ double Plugin::ReadReal(int message) {
     return (std::isfinite(v) && v > 0) ? v : 0.0;
 }
 
+// AIMP's speed and tempo (DSP manager) both change how fast the track plays: track seconds per real second
+double Plugin::ReadRate() {
+    double rate = 1.0;
+    for (int message : {AIMP_MSG_PROPERTY_SPEED, AIMP_MSG_PROPERTY_TEMPO}) {
+        const double v = ReadReal(message);   // 0 = not available (older AIMP)
+        if (v >= 0.25 && v <= 4.0) rate *= v;
+    }
+    return std::fabs(rate - 1.0) < 0.001 ? 1.0 : rate;
+}
+
 int Plugin::ReadState() {
     if (player_) return player_->GetState();   // AIMP_PLAYER_STATE_XXX
     alignas(8) uint8_t buf[8] = {0};
@@ -736,6 +752,32 @@ bool Plugin::ReadTrack(TrackInfo& t, double& duration) {
     if (t.title.empty()) t.title = util::FileNameNoExt(t.fileName);   // untagged files / streams
     if (UsesPlaceholder(config::Get(), L"next")) t.next = ReadNext();
     return true;
+}
+
+// The cover in the tags of a file the plugin cannot read itself (Ogg / Opus, WMA, APE, WavPack, WAV, ...):
+// AIMP's own tag readers know every format AIMP plays. Read once per track, only when it may be uploaded.
+std::shared_ptr<const std::vector<uint8_t>> Plugin::ReadArt(const std::wstring& fileName) {
+    const Config& c = config::Get();
+    if (!c.coverEnabled || !c.srcEmbedded || c.uploadHost == 0 || fileName.empty() || util::IsUrl(fileName) ||
+        CoverResolver::ReadsTags(fileName))
+        return nullptr;
+    ComPtr<IAIMPServiceFileInfo> service;
+    ComPtr<IAIMPFileInfo> info;
+    ComPtr<IAIMPString> uri;
+    if (FAILED(core_->QueryInterface(IID_IAIMPServiceFileInfo, service.putVoid())) || !service ||
+        FAILED(core_->CreateObject(IID_IAIMPFileInfo, info.putVoid())) || !info)
+        return nullptr;
+    *uri.put() = aimp::MakeString(core_, fileName);
+    if (!uri || FAILED(service->GetFileInfoFromFileURI(uri.get(), AIMP_SERVICE_FILEINFO_FLAG_DONTUSEAUDIODECODERS, info.get())))
+        return nullptr;
+    ComPtr<IAIMPImageContainer> art;
+    if (FAILED(info->GetValueAsObject(AIMP_FILEINFO_PROPID_ALBUMART, IID_IAIMPImageContainer, art.putVoid())) || !art)
+        return nullptr;
+    const BYTE* data = art->GetData();
+    const DWORD size = art->GetDataSize();
+    if (!data || size < 16 || size > (16u << 20)) return nullptr;
+    util::Log(L"Cover read from the tags by AIMP (%u bytes)", (unsigned)size);
+    return std::make_shared<const std::vector<uint8_t>>(data, data + size);
 }
 
 // AIMP's playback queue knows the next track (queue, shuffle and playlist order included), also in
@@ -854,8 +896,10 @@ void Plugin::Poll() {
         if (FAILED(player_->GetPosition(&pos)) || !std::isfinite(pos) || pos < 0)
             pos = ReadReal(AIMP_MSG_PROPERTY_PLAYER_POSITION);
         if (FAILED(player_->GetDuration(&dur)) || !std::isfinite(dur) || dur < 0) dur = 0;
+        s.rate = ReadRate();
         if (ps != lastState_) push = true;                  // play <-> pause
-        double expected = lastPos_ + (lastState_ == PlayState::Playing ? duration<double>(now - lastPoll_).count() : 0.0);
+        if (s.rate != sentRate_) push = true;               // speed / tempo changed: Discord's bar runs differently
+        double expected = lastPos_ + (lastState_ == PlayState::Playing ? duration<double>(now - lastPoll_).count() * s.rate : 0.0);
         if (std::fabs(pos - expected) > 1.5) push = true;   // user seeked / track restarted / next track
 
         // tags: on AIMP's track events, on any change above and every 3 s (title of a radio stream, edited tags)
@@ -867,8 +911,13 @@ void Plugin::Poll() {
             lastTrackRead_ = now;
             lastInfoDur_ = infoDur;
             uint64_t id = util::Fnv1a(t.fileName + L"|" + t.artist + L"|" + t.title + L"|" + t.album + L"|" + t.playlist);
-            if (id != lastId_) push = true;                 // new track
-            else if (t.extra != lastTrack_.extra || t.next != lastTrack_.next) push = true;   // e.g. the play count went up
+            if (id != lastId_) {                            // new track
+                push = true;
+                t.art = ReadArt(t.fileName);
+            } else {
+                t.art = lastTrack_.art;
+                if (t.extra != lastTrack_.extra || t.next != lastTrack_.next) push = true;   // e.g. the play count went up
+            }
             lastId_ = id;
             lastTrack_ = std::move(t);
         }
@@ -876,9 +925,17 @@ void Plugin::Poll() {
         if (dur <= 0) dur = ReadReal(AIMP_MSG_PROPERTY_PLAYER_DURATION);
         // Discord counts on from the position sent last: send again as soon as AIMP is half a second away from it
         // (buffering, small seeks add up unnoticed from one poll to the next). The tags are not read for this.
+        // If AIMP keeps drifting away (a cause the plugin does not know), it is corrected at most every 15 s,
+        // so it does not send all the time.
         if (!push && ps == PlayState::Playing && sentState_ == PlayState::Playing &&
-            std::fabs(pos - (sentPos_ + duration<double>(now - sentStamp_).count())) > 0.5)
-            push = true;
+            std::fabs(pos - (sentPos_ + duration<double>(now - sentStamp_).count() * s.rate)) > 0.5) {
+            if (now - lastDriftFix_ > seconds(60)) driftFixes_ = 0;   // a calm minute: correct at once again
+            if (driftFixes_ < 3 || now - lastDriftFix_ >= seconds(15)) {
+                push = true;
+                ++driftFixes_;
+                lastDriftFix_ = now;
+            }
+        }
 
         s.position = pos;
         s.duration = dur;
@@ -893,6 +950,7 @@ void Plugin::Poll() {
         forcePush_ = false;
         sentState_ = ps;
         sentPos_ = s.position;
+        sentRate_ = s.rate;
         sentStamp_ = now;
         Worker().Submit(s);
     }

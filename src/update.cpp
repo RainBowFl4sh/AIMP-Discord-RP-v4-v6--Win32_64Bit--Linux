@@ -1,5 +1,6 @@
 #include "update.h"
 
+#include <cctype>
 #include <mutex>
 #include <vector>
 
@@ -15,6 +16,7 @@ namespace {
 
 struct Release {
     std::wstring version, asset;   // asset: download URL of the .aimppack
+    std::wstring assetAlt;         // release feed: the package without a version in its name (if 'asset' is missing)
     std::string  digest;           // "sha256:<hex>" (GitHub), may be empty
 };
 
@@ -50,10 +52,49 @@ std::wstring HttpError(int status) {
     return status ? util::Subst(i18n::T("Upd.Http"), std::to_wstring(status)) : i18n::T("Upd.Offline");
 }
 
+// Without an account GitHub's API answers 60 requests per hour and address; behind a shared address (VPN,
+// university, company) they can be used up. The release feed of github.com has no such limit: its newest
+// entry names the tag; the package is named like the releases on GitHub ("aimp_discord_rpc-1.6.3.aimppack"),
+// else without the version. (No checksum from there - the package is still checked for being a ZIP with the
+// plugin's files.)
+bool FetchReleaseFromFeed(Release& rel) {
+    const std::wstring base = L"https://github.com/" + util::FromUtf8(AIMP_DISCORD_RPC_REPO);
+    web::Response r = web::Request(L"GET", base + L"/releases.atom", {L"Accept: application/atom+xml"}, std::string(),
+                                   1u << 20);
+    const std::string mark = "/releases/tag/";
+    const size_t entry = r.body.find("<entry>");
+    const size_t at = entry == std::string::npos ? entry : r.body.find(mark, entry);
+    if (r.status != 200 || at == std::string::npos) {
+        util::Log(L"Release feed: HTTP %d, no release found", r.status);
+        return false;
+    }
+    std::string tag;
+    for (size_t i = at + mark.size(); i < r.body.size() && tag.size() < 64; ++i) {
+        const char c = r.body[i];
+        if (!isalnum((unsigned char)c) && c != '.' && c != '-' && c != '_') break;
+        tag += c;
+    }
+    const std::wstring v = util::FindVersion(util::FromUtf8(tag));
+    if (v.empty()) return false;
+    rel = Release();
+    rel.version = v;
+    const std::wstring dir = base + L"/releases/download/" + util::FromUtf8(tag) + L"/";
+    rel.asset = dir + L"aimp_discord_rpc-" + v + L".aimppack";
+    rel.assetAlt = dir + L"aimp_discord_rpc.aimppack";
+    util::Log(L"Release feed: newest version %ls", v.c_str());
+    return true;
+}
+
 bool FetchRelease(Release& rel, std::wstring& err) {
     web::Response r = web::Request(L"GET", L"https://api.github.com/repos/" + util::FromUtf8(AIMP_DISCORD_RPC_REPO) +
                                                L"/releases/latest",
                                    {L"Accept: application/vnd.github+json"}, std::string(), 2u << 20);
+    if (r.status == 403 || r.status == 429) {   // GitHub's limit for requests without an account
+        util::Log(L"GitHub API: HTTP %d (limit for this address reached?) - asking the release feed", r.status);
+        if (FetchReleaseFromFeed(rel)) return true;
+        err = i18n::T("Upd.Limit");
+        return false;
+    }
     if (r.status == 404) {
         err = i18n::T("Upd.NoRelease");
         return false;
@@ -98,6 +139,7 @@ void DownloadAndOpen(const Release& rel) {
     }
     SetState(Phase::Downloading, rel.version);
     web::Response r = web::Get(rel.asset, 64u << 20);
+    if (r.status == 404 && !rel.assetAlt.empty()) r = web::Get(rel.assetAlt, 64u << 20);
     if (r.status != 200 || r.body.size() < 1000 || r.body.compare(0, 4, "PK\x03\x04") != 0) {
         SetState(Phase::Failed, rel.version, r.status == 200 ? i18n::T("Upd.Damaged") : HttpError(r.status));
         return;

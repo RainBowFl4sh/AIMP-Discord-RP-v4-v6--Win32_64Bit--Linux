@@ -27,6 +27,7 @@ public:
     void        ClearCache();
     void        Forget(const TrackInfo& t);                          // drop this track's cover (resolved again)
     static bool Reachable(const std::string& url);                   // the URL delivers a picture (first bytes)
+    static bool ReadsTags(const std::wstring& path);                 // own reader for the file's cover (ID3v2 / FLAC / MP4)
 
     static bool EnsureImaging();                                     // Windows: GDI+ started (also for the preview)
     static void ShutdownImaging();                                   // GDI+ shutdown, call once on unload

@@ -279,6 +279,7 @@ class Player : public Obj<IAIMPServicePlayer> {
 public:
     int state = 0;
     double pos = 0, dur = 0;
+    double rate = 1;   // track seconds per real second (AIMP's speed / tempo, or a drift the plugin cannot know)
     FileInfo* info = nullptr;
     PlaylistItem* item = nullptr;
     HRESULT WINAPI Play(IAIMPPlaybackQueueItem*) override { return E_NOTIMPL; }
@@ -319,8 +320,13 @@ class Dispatcher : public Obj<IAIMPServiceMessageDispatcher> {
 public:
     IAIMPMessageHook* hook = nullptr;
     Str notification;   // last AIMP_MSG_CMD_SHOW_NOTIFICATION text
-    HRESULT WINAPI Send(DWORD msg, INT32, void* param2) override {
+    float speed = 0;    // AIMP_MSG_PROPERTY_SPEED (0: like an AIMP that does not answer)
+    HRESULT WINAPI Send(DWORD msg, INT32 param1, void* param2) override {
         if (msg == (DWORD)AIMP_MSG_CMD_SHOW_NOTIFICATION && param2) notification = static_cast<TChar*>(param2);
+        if (msg == (DWORD)AIMP_MSG_PROPERTY_SPEED && param1 == AIMP_MSG_PROPVALUE_GET && param2 && speed > 0) {
+            memcpy(param2, &speed, sizeof speed);
+            return S_OK;
+        }
         return E_NOTIMPL;
     }
     DWORD WINAPI Register(PChar) override { return 0; }
@@ -479,6 +485,43 @@ public:
     }
 };
 
+// AIMP's tag readers: the cover in the file's tags (AIMP_TEST_TAG_ART: a picture file; unset: no cover)
+class ImageContainer : public Obj<IAIMPImageContainer> {
+public:
+    std::string data;
+    HRESULT __unknwncall QueryInterface(REFIID riid, LPVOID* ppv) override {
+        if (Same(riid, IID_IAIMPImageContainer)) { *ppv = static_cast<IAIMPImageContainer*>(this); AddRef(); return S_OK; }
+        return Obj<IAIMPImageContainer>::QueryInterface(riid, ppv);
+    }
+    HRESULT WINAPI CreateImage(IAIMPImage**) override { return E_NOTIMPL; }
+    HRESULT WINAPI GetInfo(SIZE*, INT32*) override { return E_NOTIMPL; }
+    BYTE* WINAPI GetData() override { return reinterpret_cast<BYTE*>(&data[0]); }
+    DWORD WINAPI GetDataSize() override { return (DWORD)data.size(); }
+    HRESULT WINAPI SetDataSize(DWORD) override { return E_NOTIMPL; }
+};
+
+class FileInfoService : public Obj<IAIMPServiceFileInfo> {
+public:
+    int reads = 0;
+    ImageContainer art;
+    HRESULT WINAPI GetFileInfoFromFileURI(IAIMPString* uri, DWORD, IAIMPFileInfo* info) override {
+        ++reads;
+        if (!uri || !info) return E_INVALIDARG;
+        if (art.data.empty()) {
+            FILE* f = fopen(Env("AIMP_TEST_TAG_ART").c_str(), "rb");
+            if (!f) return S_OK;   // no cover in the tags
+            char buf[4096];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof buf, f)) > 0) art.data.append(buf, n);
+            fclose(f);
+        }
+        static_cast<FileInfo*>(info)->objects[AIMP_FILEINFO_PROPID_ALBUMART] = static_cast<IAIMPImageContainer*>(&art);
+        return S_OK;
+    }
+    HRESULT WINAPI GetFileInfoFromStream(IAIMPStream*, DWORD, IAIMPFileInfo*) override { return E_NOTIMPL; }
+    HRESULT WINAPI GetVirtualFile(IAIMPString*, DWORD, IAIMPVirtualFile**) override { return E_NOTIMPL; }
+};
+
 // AIMP's formatter: knows %PlayCount from AIMP's statistics (playCount < 0: like an AIMP without it)
 class Formatter : public Obj<IAIMPServiceFileInfoFormatter> {
 public:
@@ -506,6 +549,7 @@ public:
     ShutdownService* shutdown = new ShutdownService();
     MessageDialog* message = new MessageDialog();
     Formatter* formatter = new Formatter();
+    FileInfoService* fileInfo = new FileInfoService();
     mockui::Service ui;
     mockui::OptionsService options;
     IAIMPOptionsDialogFrame* frame = nullptr;
@@ -519,6 +563,7 @@ public:
         if (Same(riid, IID_IAIMPUIMessageDialog)) { message->AddRef(); *ppv = message; return S_OK; }
         if (Same(riid, IID_IAIMPServiceUI)) { *ppv = static_cast<IAIMPServiceUI*>(&ui); return S_OK; }
         if (Same(riid, IID_IAIMPServiceFileInfoFormatter)) { formatter->AddRef(); *ppv = formatter; return S_OK; }
+        if (Same(riid, IID_IAIMPServiceFileInfo)) { fileInfo->AddRef(); *ppv = fileInfo; return S_OK; }
         if (Same(riid, IID_IAIMPServiceOptionsDialog)) { *ppv = static_cast<IAIMPServiceOptionsDialog*>(&options); return S_OK; }
         return Obj<IAIMPCore>::QueryInterface(riid, ppv);
     }
@@ -527,6 +572,7 @@ public:
         if (Same(iid, IID_IAIMPMemoryStream)) { *obj = static_cast<IAIMPMemoryStream*>(new MemoryStream()); return S_OK; }
         if (Same(iid, IID_IAIMPImage)) { *obj = static_cast<IAIMPImage*>(new Image()); return S_OK; }
         if (Same(iid, IID_IAIMPAction)) { *obj = static_cast<IAIMPAction*>(new Action()); return S_OK; }
+        if (Same(iid, IID_IAIMPFileInfo)) { *obj = static_cast<IAIMPFileInfo*>(new FileInfo()); return S_OK; }
         return E_NOTIMPL;
     }
     HRESULT WINAPI GetPath(int id, IAIMPString** v) override {   // AIMP_TEST_PROFILE: AIMP's profile folder
@@ -579,7 +625,7 @@ void Wait500ms() {
 void Tick(Core* core, int seconds) {   // AIMP fires UPDATE_POSITION once per second while playing
     for (int i = 0; i < seconds * 2; ++i) {
         Wait500ms();
-        if (core->player->state == 2) core->player->pos += 0.5;
+        if (core->player->state == 2) core->player->pos += 0.5 * core->player->rate;
         core->dispatcher->Fire(AIMP_MSG_EVENT_PLAYER_UPDATE_POSITION);
     }
 }
@@ -1467,6 +1513,35 @@ int RunTests(Core* core) {
         Tick(core, 3);
         return -1;   // no settings page in this run: just finalize
     }
+    if (Env("AIMP_TEST_UPDATE") == "1") {   // update check only (at start): ends once "AIMP" got the package
+        for (int i = 0; i < 30; ++i) {
+            Tick(core, 1);
+            if (FILE* f = fopen(Env("AIMP_TEST_MARKER", "opened.txt").c_str(), "rb")) {
+                fclose(f);
+                printf("update: package opened\n");
+                return -1;
+            }
+        }
+        return Fail("update package not opened");
+    }
+    if (Env("AIMP_TEST_DRIFT") == "1") {   // AIMP's speed / tempo; AIMP drifting away for a reason unknown
+        FileInfo* info = core->player->info;
+        info->text[AIMP_FILEINFO_PROPID_TITLE] = T("Speed");
+        core->dispatcher->speed = 1.25f;   // the plugin learns it: Discord's bar runs 1.25 times as fast
+        core->player->rate = 1.25;
+        core->player->state = 2;
+        core->player->pos = 30;
+        core->player->dur = 300;
+        core->dispatcher->Fire(AIMP_MSG_EVENT_PLAYER_STATE);
+        Tick(core, 14);
+        printf("drift: speed 1.25 for 14 s\n");
+        info->text[AIMP_FILEINFO_PROPID_TITLE] = T("Drift");
+        core->dispatcher->speed = 0;       // AIMP still plays faster, but the plugin cannot know why
+        core->dispatcher->Fire(AIMP_MSG_EVENT_STREAM_START);
+        Tick(core, 46);
+        printf("drift: unknown drift for 46 s\n");
+        return -1;
+    }
     if (Env("AIMP_TEST_ADVANCED") == "1") {   // advanced placeholders: more fields and %IF... (GitHub issue #4)
         FileInfo* info = core->player->info;
         info->text[AIMP_FILEINFO_PROPID_COMPOSER] = T("Freddie Mercury");
@@ -1520,7 +1595,7 @@ int RunTests(Core* core) {
         TStr source;   // AIMP_TEST_UPLOAD_HOST: where the cover should end up (default catbox.moe)
         const TStr host = FromUtf8(("uploaded to " + Env("AIMP_TEST_UPLOAD_HOST", "catbox.moe")).c_str());
         if (!WaitForLabel(core, host, 20, &source)) return Fail("folder cover was not uploaded where expected");
-        printf("upload: %s\n", Narrow(source).c_str());
+        printf("upload: %s (AIMP's tag readers asked %d time(s))\n", Narrow(source).c_str(), core->fileInfo->reads);
         Tick(core, 10);   // time for the check whether Discord can show the cover (and its repair)
         return 0;
     }

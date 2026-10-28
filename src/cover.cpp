@@ -773,6 +773,16 @@ void CoverResolver::Forget(const TrackInfo& t) {
 
 bool CoverResolver::Reachable(const std::string& url) { return ImageReachable(url); }
 
+bool CoverResolver::ReadsTags(const std::wstring& path) {
+    FILE* f = util::OpenFile(path, "rb");
+    if (!f) return false;
+    Bytes head;
+    const bool ok = ReadAt(f, 0, 12, head) && (memcmp(head.data(), "ID3", 3) == 0 || memcmp(head.data(), "fLaC", 4) == 0 ||
+                                               memcmp(&head[4], "ftyp", 4) == 0);
+    fclose(f);
+    return ok;
+}
+
 CoverResult CoverResolver::PeekCache(const TrackInfo& t) {
     std::string key = KeyOf(t);
     std::lock_guard<std::mutex> lk(mu_);
@@ -816,6 +826,7 @@ CoverResult CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
         Bytes art;
         const char* from = "embedded";
         if (cfg.srcEmbedded) ExtractEmbedded(t.fileName, art);
+        if (art.empty() && cfg.srcEmbedded && t.art && LooksLikeImage(*t.art)) art = *t.art;   // read by AIMP
         if (art.empty() && cfg.srcFolder && FindFolderImage(util::DirName(t.fileName), cfg.coverNames, art)) from = "folder";
         if (art.empty()) return r;
         Bytes upload = ToJpeg(art, 512);

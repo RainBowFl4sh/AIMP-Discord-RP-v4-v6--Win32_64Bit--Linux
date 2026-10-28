@@ -39,6 +39,15 @@ AIMP_DISCORD_RPC_DEBUG=1 AIMP_TEST_INSTALL="$TMP/plugin/aimp_discord_rpc.so" "$B
 python3 "$HERE/check_results.py" "$TMP/frames.log" "$TMP/web.log" "$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini" \
     "$OUT/exported-settings.ini" "$TMP/opened.txt" "$XDG_CONFIG_HOME/AIMP/DiscordRPC"
 
+# GitHub's API limit is used up (shared address): the release feed names the new version, the package is opened
+: > "$TMP/web.log.api-limit"
+rm -f "$TMP/opened.txt"
+printf '[DiscordRPC]\nConfigVersion=10\nCoverEnabled=0\nUpdateCheck=1\nUpdateFrequency=0\nUpdateAuto=1\n' > "$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini"
+AIMP_TEST_UPDATE=1 "$BUILD/host_test" "$BUILD/aimp_discord_rpc.so"
+grep -q "releases.atom" "$TMP/web.log" && grep -q "v9.9.9/aimp_discord_rpc-9.9.9.aimppack" "$TMP/web.log" && grep -q "9.9.9.aimppack" "$TMP/opened.txt" \
+    || { echo "FAILED: update through the release feed"; tail -5 "$TMP/web.log"; exit 1; }
+rm -f "$TMP/web.log.api-limit"
+
 # a local cover (folder image) is uploaded to (fake) catbox.moe - PHP parses the upload like the real service
 mkdir -p "$TMP/music/Queen"
 python3 -c "import sys; sys.path.insert(0, '$HERE'); import fake_web; open(sys.argv[1], 'wb').write(fake_web.png((10, 120, 200)))" "$TMP/music/Queen/cover.png"
@@ -56,6 +65,16 @@ AIMP_TEST_UPLOAD=1 AIMP_TEST_UPLOAD_HOST=x0.at AIMP_TEST_TRACK="$TMP/music/Queen
 grep -q "^/x0.at/ .* -> https://x0.at/" "$TMP/web.log" || { echo "FAILED: x0.at fallback"; grep -e catbox -e x0.at "$TMP/web.log"; exit 1; }
 grep -q 'T3st.png?r=1' "$TMP/frames.log" || { echo "FAILED: cover not repaired for Discord"; grep -o 'large_image[^,]*' "$TMP/frames.log" | tail -5; exit 1; }
 rm -f "$TMP/web.log.catbox-broken" "$TMP/web.log.proxy-broken"
+# an Opus file (no folder image): the plugin cannot read its tags itself - AIMP's tag readers deliver the cover
+mkdir -p "$TMP/music/Opus"
+: > "$TMP/music/Opus/01.opus"
+python3 -c "import sys; sys.path.insert(0, '$HERE'); import fake_web; open(sys.argv[1], 'wb').write(fake_web.png((200, 60, 140)))" "$TMP/tag-art.png"
+rm -rf "$XDG_CONFIG_HOME/AIMP/DiscordRPC" "$XDG_CONFIG_HOME/AIMP/DiscordRPC_covers.tsv"
+AIMP_TEST_UPLOAD=1 AIMP_TEST_TAG_ART="$TMP/tag-art.png" AIMP_TEST_TRACK="$TMP/music/Opus/01.opus" "$BUILD/host_test" "$BUILD/aimp_discord_rpc.so" > "$TMP/opus.out" \
+    || { cat "$TMP/opus.out"; exit 1; }
+grep "^upload:" "$TMP/opus.out"
+grep -q "^upload: Source: from the file's tags, uploaded to catbox.moe (AIMP's tag readers asked 1 time" "$TMP/opus.out" \
+    || { echo "FAILED: the cover AIMP read from the Opus file was not uploaded"; exit 1; }
 
 # texts with variants ("a || b") switch every RotateSeconds; own name instead of "AIMP"; title changes; tag reads
 printf '[DiscordRPC]\nConfigVersion=7\nCoverEnabled=0\nDetails=%%artist%% || %%title%%\nState=%%title%%\nActivityName=%%album%%\nRotateSeconds=5\nUpdateCheck=0\n' > "$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini"
@@ -67,6 +86,13 @@ python3 "$HERE/check_rotation.py" "$TMP/rotate.frames" "$TMP/rotate.out" || exit
 # advanced placeholders (GitHub issue #4): templates unit test, then more fields and nested %IF... end to end -
 # once with AIMP's formatter (play count from AIMP's statistics), once without it (music library value)
 "$BUILD/template_test"
+# AIMP's speed / tempo: Discord's bar follows it; a drift of unknown cause is corrected, but not all the time
+printf '[DiscordRPC]\nConfigVersion=10\nCoverEnabled=0\nDetails=%%title%%\nUpdateCheck=0\n' > "$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini"
+before=$(wc -l < "$TMP/frames.log")
+AIMP_TEST_DRIFT=1 "$BUILD/host_test" "$BUILD/aimp_discord_rpc.so" > /dev/null
+tail -n +$((before + 1)) "$TMP/frames.log" > "$TMP/drift.frames"
+python3 "$HERE/check_drift.py" "$TMP/drift.frames" || exit 1
+
 for formatter in 1 0; do
     printf '[DiscordRPC]\nConfigVersion=9\nCoverEnabled=0\nAdvancedPlaceholders=1\nDetails=%s\nState=%%composer%% - %%bitrate%% kbps\nLargeText=%%samplerate%%Hz / %%bitdepth%% bit\nUpdateCheck=0\n' \
         '%If(%Comment,%Comment,%IFEqual(%PlayCount,1,This song has been played once before,%IFGreater(%PlayCount,1,This song has been played %PlayCount times,%FileSize)))' > "$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini"

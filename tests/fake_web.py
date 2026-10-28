@@ -4,7 +4,9 @@
 Usage: fake_web.py <port file> <log file>
 The plugin is started with AIMP_DISCORD_RPC_TEST_URL=http://127.0.0.1:<port>; it then requests
 "https://api.github.com/x" as "http://127.0.0.1:<port>/api.github.com/x". Served:
-  GitHub releases API  -> release 9.9.9 with an .aimppack asset (+ its sha256 digest)
+  GitHub releases API  -> release 9.9.9 with an .aimppack asset (+ its sha256 digest);
+                          <log>.api-limit exists: 403 (limit used up), the release feed (releases.atom) answers;
+                          only the package without a version in its name exists
   the .aimppack        -> a small ZIP with the plugin's folder name inside
   GitHub avatar, Discord application assets / avatars, Deezer search + cover -> small PNG pictures
   x0.at upload         -> https://x0.at/T3st.png (the file is served, like the real service, only to GET)
@@ -120,6 +122,23 @@ RELEASE = {
     ],
     "body": "## 9.9.9\r\n- test release",
 }
+FEED = f"""<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en-US">
+  <id>tag:github.com,2008:https://github.com/{REPO}/releases</id>
+  <link type="text/html" rel="alternate" href="https://github.com/{REPO}/releases"/>
+  <title>Release notes from {REPO.split('/')[1]}</title>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/v9.9.9</id>
+    <link rel="alternate" type="text/html" href="https://github.com/{REPO}/releases/tag/v9.9.9"/>
+    <title>v9.9.9</title>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/v1.0.0</id>
+    <link rel="alternate" type="text/html" href="https://github.com/{REPO}/releases/tag/v1.0.0"/>
+    <title>v1.0.0</title>
+  </entry>
+</feed>
+""".encode()
 ASSETS = [{"id": "1111", "type": 1, "name": "aimp"}, {"id": "2222", "type": 1, "name": "play"},
           {"id": "3333", "type": 1, "name": "pause"}, {"id": "4444", "type": 1, "name": "other"}]
 DEEZER = {"data": [{"id": 1, "title": "A Night at the Opera",
@@ -145,7 +164,11 @@ class Handler(BaseHTTPRequestHandler):
         with open(self.server.log, "a") as f:
             f.write(self.path + "\n")
         if path == f"/api.github.com/repos/{REPO}/releases/latest":
+            if os.path.exists(self.server.log + ".api-limit"):   # GitHub's limit without an account is used up
+                return self.reply(403, {"message": "API rate limit exceeded for 127.0.0.1."})
             return self.reply(200, RELEASE)
+        if path == f"/github.com/{REPO}/releases.atom":
+            return self.reply(200, FEED, "application/atom+xml; charset=utf-8")
         if path == PACKAGE_URL.replace("https:/", ""):
             return self.reply(200, PACKAGE)
         if path.startswith("/avatars.githubusercontent.com/"):

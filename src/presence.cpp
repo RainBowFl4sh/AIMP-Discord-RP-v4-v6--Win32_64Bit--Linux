@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <ctime>
 #include <map>
 #include <vector>
 
@@ -145,12 +144,14 @@ ActivityTexts ComputeTexts(const Config& c, const Snapshot& s, clock_t_::duratio
         t.hidden = Hidden::PausedTimeout;
 
     double pos = s.position;
-    if (playing) pos += std::chrono::duration<double>(clock_t_::now() - s.stamp).count();
+    const double rate = s.rate > 0 ? s.rate : 1.0;
+    if (playing) pos += std::chrono::duration<double>(clock_t_::now() - s.stamp).count() * rate;
     if (s.duration > 0 && pos > s.duration) pos = s.duration;
     if (pos < 0) pos = 0;
     t.playing = playing;
     t.pos = pos;
     t.dur = s.duration;
+    t.rate = rate;
 
     Vars v;
     v[L"artist"]      = s.track.artist;
@@ -390,11 +391,12 @@ bool PresenceWorker::BuildActivity(const Config& c, const Snapshot& s, std::stri
     }
 
     // progress bar (Listening) or elapsed counter (Playing)
-    // in milliseconds: whole seconds put Discord up to a second away from AIMP's position
+    // in milliseconds: whole seconds put Discord up to a second away from AIMP's position.
+    // Discord counts real time: with AIMP's speed / tempo changed the track lasts dur / rate seconds
     if (c.showTimestamps && t.playing) {
-        const long long start = (long long)util::UnixTimeMs() - (long long)(t.pos * 1000.0 + 0.5);
+        const long long start = (long long)util::UnixTimeMs() - (long long)(t.pos / t.rate * 1000.0 + 0.5);
         a += ",\"timestamps\":{\"start\":" + std::to_string(start);
-        if (t.dur > 0) a += ",\"end\":" + std::to_string(start + (long long)(t.dur * 1000.0 + 0.5));
+        if (t.dur > 0) a += ",\"end\":" + std::to_string(start + (long long)(t.dur / t.rate * 1000.0 + 0.5));
         a += "}";
     }
 
@@ -414,7 +416,7 @@ bool PresenceWorker::BuildActivity(const Config& c, const Snapshot& s, std::stri
 std::string PresenceWorker::TestActivity(const Config& c) {
     return "{\"type\":" + std::to_string(c.activityType) + ",\"details\":" +
            Quote(util::ToUtf8(i18n::T("Test.Details"))) + ",\"state\":" + Quote(util::ToUtf8(i18n::T("Test.State"))) +
-           ",\"timestamps\":{\"start\":" + std::to_string((long long)time(nullptr)) +
+           ",\"timestamps\":{\"start\":" + std::to_string((long long)util::UnixTimeMs()) +
            "},\"assets\":{\"large_image\":\"aimp\",\"large_text\":\"AIMP Discord Rich Presence " AIMP_DISCORD_RPC_VERSION
            "\",\"small_image\":\"play\",\"small_text\":" + Quote(util::ToUtf8(i18n::T("Test.Small"))) + "}}";
 }

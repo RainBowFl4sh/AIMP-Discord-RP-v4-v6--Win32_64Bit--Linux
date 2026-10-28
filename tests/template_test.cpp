@@ -141,10 +141,10 @@ int main() {
         {"german.lng", kLangDe, sizeof kLangDe, "Tpl.ListEscape="},
         {"russian.lng", kLangRu, sizeof kLangRu, "Tpl.ListEscape="},
         {"ukrainian.lng", kLangUk, sizeof kLangUk, "Tpl.ListEscape="},
-        {"CHANGELOG.md", kChangelog, sizeof kChangelog, "## 1.6.2"},
-        {"changelog.de.md", kChangelogDe, sizeof kChangelogDe, "## 1.6.2"},
-        {"changelog.ru.md", kChangelogRu, sizeof kChangelogRu, "## 1.6.2"},
-        {"changelog.uk.md", kChangelogUk, sizeof kChangelogUk, "## 1.6.2"}};
+        {"CHANGELOG.md", kChangelog, sizeof kChangelog, "## 1.6.3"},
+        {"changelog.de.md", kChangelogDe, sizeof kChangelogDe, "## 1.6.3"},
+        {"changelog.ru.md", kChangelogRu, sizeof kChangelogRu, "## 1.6.3"},
+        {"changelog.uk.md", kChangelogUk, sizeof kChangelogUk, "## 1.6.3"}};
     for (const auto& p : packed) {
         std::string text;
         if (!inflate::Gunzip(p.data, p.size, text) || text.find(p.must) == std::string::npos || text.size() < p.size * 2) {

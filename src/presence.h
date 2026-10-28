@@ -20,6 +20,7 @@ struct Snapshot {
     PlayState state    = PlayState::Stopped;
     double    position = 0;   // seconds at 'stamp'
     double    duration = 0;   // seconds, 0 = unknown (radio)
+    double    rate     = 1;   // AIMP's speed x tempo: track seconds per real second (1 = normal)
     uint64_t  trackId  = 0;
     TrackInfo track;
     std::chrono::steady_clock::time_point stamp = std::chrono::steady_clock::now();
@@ -33,6 +34,7 @@ struct ActivityTexts {
     Hidden      hidden  = Hidden::No;
     bool        playing = false;
     double      pos = 0, dur = 0;
+    double      rate = 1;                               // track seconds per real second (AIMP's speed / tempo)
     std::string name;                                   // instead of the application name, "" = the app's name
     std::string details, state, largeText, smallText;   // UTF-8, "" = line not shown
     std::string detailsUrl;                             // clickable title, "" = none

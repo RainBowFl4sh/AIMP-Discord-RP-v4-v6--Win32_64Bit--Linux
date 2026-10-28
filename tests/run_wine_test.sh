@@ -51,6 +51,15 @@ cp "$BUILD/aimp_discord_rpc.dll" "$BUILD/host_test.exe" "$TMP/"
 python3 "$HERE/check_results.py" "$TMP/frames.log" "$TMP/web.log" "$APPDATA_DIR/AIMP/DiscordRPC.ini" \
     "$OUT/exported-settings.ini" "$TMP/opened.txt" "$APPDATA_DIR/AIMP/DiscordRPC"
 
+# GitHub's API limit is used up (shared address): the release feed names the new version, the package is opened
+: > "$TMP/web.log.api-limit"
+rm -f "$TMP/opened.txt"
+printf '[DiscordRPC]\r\nConfigVersion=10\r\nCoverEnabled=0\r\nUpdateCheck=1\r\nUpdateFrequency=0\r\nUpdateAuto=1\r\n' > "$APPDATA_DIR/AIMP/DiscordRPC.ini"
+(cd "$TMP" && AIMP_TEST_UPDATE=1 wine host_test.exe aimp_discord_rpc.dll)
+grep -q "releases.atom" "$TMP/web.log" && grep -q "v9.9.9/aimp_discord_rpc-9.9.9.aimppack" "$TMP/web.log" && grep -q "9.9.9.aimppack" "$TMP/opened.txt" \
+    || { echo "FAILED: update through the release feed"; tail -5 "$TMP/web.log"; exit 1; }
+rm -f "$TMP/web.log.api-limit"
+
 # a local cover (folder image) is uploaded to (fake) catbox.moe through WinHTTP - PHP parses it like the real service
 mkdir -p "$TMP/music/Queen"
 python3 -c "import sys; sys.path.insert(0, '$HERE'); import fake_web; open(sys.argv[1], 'wb').write(fake_web.png((10, 120, 200)))" "$TMP/music/Queen/cover.png"
@@ -68,6 +77,16 @@ rm -rf "$APPDATA_DIR/AIMP/DiscordRPC" "$APPDATA_DIR/AIMP/DiscordRPC_covers.tsv"
 grep -q "^/x0.at/ .* -> https://x0.at/" "$TMP/web.log" || { echo "FAILED: x0.at fallback"; grep -e catbox -e x0.at "$TMP/web.log"; exit 1; }
 grep -q 'T3st.png?r=1' "$TMP/frames.log" || { echo "FAILED: cover not repaired for Discord"; grep -o 'large_image[^,]*' "$TMP/frames.log" | tail -5; exit 1; }
 rm -f "$TMP/web.log.catbox-broken" "$TMP/web.log.proxy-broken"
+# an Opus file (no folder image): the plugin cannot read its tags itself - AIMP's tag readers deliver the cover
+mkdir -p "$TMP/music/Opus"
+: > "$TMP/music/Opus/01.opus"
+python3 -c "import sys; sys.path.insert(0, '$HERE'); import fake_web; open(sys.argv[1], 'wb').write(fake_web.png((200, 60, 140)))" "$TMP/tag-art.png"
+rm -rf "$APPDATA_DIR/AIMP/DiscordRPC" "$APPDATA_DIR/AIMP/DiscordRPC_covers.tsv"
+(cd "$TMP" && AIMP_TEST_UPLOAD=1 AIMP_TEST_TAG_ART="tag-art.png" AIMP_TEST_TRACK="Z:$(echo "$TMP/music/Opus/01.opus" | tr / '\\')" wine host_test.exe aimp_discord_rpc.dll > "$TMP/opus.out") \
+    || { cat "$TMP/opus.out"; exit 1; }
+grep "^upload:" "$TMP/opus.out"
+grep -q "^upload: Source: from the file's tags, uploaded to catbox.moe (AIMP's tag readers asked 1 time" "$TMP/opus.out" \
+    || { echo "FAILED: the cover AIMP read from the Opus file was not uploaded"; exit 1; }
 
 # texts with variants ("a || b") switch every RotateSeconds; own name instead of "AIMP"; title changes; tag reads
 printf '[DiscordRPC]\r\nConfigVersion=7\r\nCoverEnabled=0\r\nDetails=%%artist%% || %%title%%\r\nState=%%title%%\r\nActivityName=%%album%%\r\nRotateSeconds=5\r\nUpdateCheck=0\r\n' > "$APPDATA_DIR/AIMP/DiscordRPC.ini"
@@ -79,6 +98,13 @@ python3 "$HERE/check_rotation.py" "$TMP/rotate.frames" "$TMP/rotate.out" || exit
 # advanced placeholders (GitHub issue #4): templates unit test, then more fields and nested %IF... end to end
 cp "$BUILD/template_test.exe" "$TMP/"
 (cd "$TMP" && wine template_test.exe) || exit 1
+# AIMP's speed / tempo: Discord's bar follows it; a drift of unknown cause is corrected, but not all the time
+printf '[DiscordRPC]\r\nConfigVersion=10\r\nCoverEnabled=0\r\nDetails=%%title%%\r\nUpdateCheck=0\r\n' > "$APPDATA_DIR/AIMP/DiscordRPC.ini"
+before=$(wc -l < "$TMP/frames.log")
+(cd "$TMP" && AIMP_TEST_DRIFT=1 wine host_test.exe aimp_discord_rpc.dll > /dev/null)
+tail -n +$((before + 1)) "$TMP/frames.log" > "$TMP/drift.frames"
+python3 "$HERE/check_drift.py" "$TMP/drift.frames" || exit 1
+
 for formatter in 1 0; do
     printf '[DiscordRPC]\r\nConfigVersion=9\r\nCoverEnabled=0\r\nAdvancedPlaceholders=1\r\nDetails=%s\r\nState=%%composer%% - %%bitrate%% kbps\r\nLargeText=%%samplerate%%Hz / %%bitdepth%% bit\r\nUpdateCheck=0\r\n' \
         '%If(%Comment,%Comment,%IFEqual(%PlayCount,1,This song has been played once before,%IFGreater(%PlayCount,1,This song has been played %PlayCount times,%FileSize)))' > "$APPDATA_DIR/AIMP/DiscordRPC.ini"
