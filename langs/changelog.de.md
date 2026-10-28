@@ -1,5 +1,26 @@
 # Änderungen
 
+## 1.6.3
+
+### Behoben
+- **Cover aus Ogg-/Opus-, WMA-, APE-, WavPack- und anderen Dateien**: Das Cover in ihren Tags wurde nicht gelesen
+  (nur bei MP3, FLAC und M4A). Das Plugin fragt dafür jetzt AIMP, das die Tags aller Formate liest, die es abspielt
+- **Geschwindigkeit und Tempo im DSP-Manager von AIMP**: Der Fortschrittsbalken in Discord läuft jetzt so schnell,
+  wie der Titel spielt (bei 125 % dauert ein 4:00-Titel 3:12). Bisher wurde die Anzeige alle 2 Sekunden neu gesendet,
+  weil AIMP Discords Zähler ständig davonlief. Weicht AIMP aus einem anderen Grund ab, wird die ersten Male sofort
+  korrigiert, danach höchstens alle 15 Sekunden
+- **Update-Prüfung**: Ist GitHubs Limit für Abfragen ohne Konto aufgebraucht (60 pro Stunde, geteilt von allen
+  hinter derselben Adresse - VPN, Uni, Firma), wird die neue Version jetzt über den Release-Feed von GitHub gefunden.
+  Klappt auch das nicht, sagt der Tab *Über* das, statt „Fehler 403“ zu zeigen
+
+### Geändert
+- Tab *Cover*: „Cover in den Tags (MP3 / FLAC / M4A)“ heißt jetzt „Cover in den Tags der Datei“
+
+### Unter der Haube
+- *Test-Presence senden* sendet die Zeit wie die normale Anzeige in Millisekunden
+- Builds auf GitHub: Zeitlimits und Wiederholungen beim Herunterladen, damit ein hängender Paketserver einen Build
+  nicht stundenlang aufhält; neuere Versionen der Checkout-/Artifact-Actions von GitHub
+
 ## 1.6.2
 
 ### Neu

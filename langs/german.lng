@@ -93,7 +93,7 @@ Disp.OwnLink=Eigener Link:
 
 Cov.Enable=Album-Cover in Discord anzeigen
 Cov.Info=Discord zeigt nur Cover mit öffentlicher URL. Das Cover deiner Datei kann hochgeladen werden (x0.at ohne Konto) oder wird online gesucht (siehe „Quellen“). Jedes Cover wird nur einmal gesucht und gespeichert.
-Cov.Embedded=Cover in den Tags (MP3 / FLAC / M4A)
+Cov.Embedded=Cover in den Tags der Datei
 Cov.Folder=Bild im Ordner des Titels
 Cov.FolderNames=Dateinamen (;):
 Cov.Upload=Cover hochladen zu:
@@ -201,6 +201,7 @@ Upd.PopupRestarted=AIMP wurde neu gestartet, um das Update abzuschließen.
 Upd.Failed=Update fehlgeschlagen: %1
 Upd.Http=GitHub meldet Fehler %1
 Upd.Offline=keine Verbindung zu GitHub
+Upd.Limit=GitHubs Limit für Abfragen aus deinem Netz ist aufgebraucht – in einer Stunde erneut versuchen
 Upd.NoRelease=noch keine Version veröffentlicht
 Upd.NoVersion=die neueste Version hat keine Versionsnummer
 Upd.NoPackage=die Version enthält keine .aimppack-Datei
