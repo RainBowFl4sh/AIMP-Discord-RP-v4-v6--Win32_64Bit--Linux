@@ -1,4 +1,4 @@
-# AIMP Discord Rich Presence 1.6.2 for AIMP 4, 5 and 6 (Windows x86 / x64 + Linux)
+# AIMP Discord Rich Presence 1.6.3 for AIMP 4, 5 and 6 (Windows x86 / x64 + Linux)
 
 Discord Rich Presence plugin for AIMP 4, 5 and 6 (AIMP 3 with limitations) with its own settings tab inside AIMP's preferences -
 on Windows **and** Linux, in English, German, Russian and Ukrainian, with a live preview, update check and
@@ -37,7 +37,7 @@ In the member list:
 
 - Track title / artist / album on your Discord profile with Discord's **native progress bar** ("Listening to AIMP")
 - Album cover:
-  - the file's own cover (tags MP3 / FLAC / M4A or folder image) is uploaded to **x0.at** (no account / key needed),
+  - the file's own cover (tags of any format AIMP plays, or the folder image) is uploaded to **x0.at** (no account / key needed),
     catbox.moe or Imgur (Client-ID); every upload is checked, and if a host fails another one stands in
   - online lookup without upload: **Spotify** (free developer app), **Deezer**, **Apple Music / iTunes**, **Bandcamp**, **Discogs** (free token), **MusicBrainz + Cover Art Archive**
   - artist check against every hit to avoid wrong covers; covers are cached on disk
@@ -346,7 +346,7 @@ The presence looks the same for everyone: Discord loads the public cover URL its
 - Uploaded covers (x0.at / catbox.moe / Imgur) are reachable by anyone who has the link. Uploading can be turned off in the *Cover art* tab.
 - Online lookups match by artist + album / title, so wrong or missing covers are possible for obscure releases.
 - Discord limits updates, so changes are combined (max. one update every 2 seconds).
-- Embedded covers are not read from Ogg/Opus, WMA and APE files (folder image / online lookup still work).
+- With AIMP's speed / tempo changed, Discord's progress bar shows the real playing time (125 %: a 4:00 track shows 3:12).
 - While music plays and PreMiD is active at the same time, Discord shows both activities; Discord decides the order.
 - Network access: the cover sources above, `api.github.com` / `github.com` for the update check (can be switched
   off), and - only while the settings page is open - GitHub (author picture) and Discord's CDN (the pictures of
@@ -374,6 +374,10 @@ optional. Bug reports and translations on GitHub help just as much.
 The full list of changes is in [CHANGELOG.md](CHANGELOG.md) (also in [Deutsch](langs/changelog.de.md),
 [Русский](langs/changelog.ru.md) and [Українська](langs/changelog.uk.md) - Russian and Ukrainian translated with AI)
 and on the plugin's *About* tab.
+
+**1.6.3** - Covers in the tags of **Ogg / Opus, WMA, APE, WavPack** and other files are read (through AIMP).
+Discord's progress bar follows AIMP's **speed / tempo** (DSP manager) instead of being sent again every 2 seconds. The
+update check still finds new versions when GitHub's limit for requests without an account is used up.
 
 **1.6.2** - Small *Support this plugin* link (PayPal) on the *About* tab. Discord follows AIMP's progress **almost in real time**: start and end of the track are sent in
 milliseconds, and the presence is sent again as soon as AIMP is half a second away from Discord's counter. Clearer hint

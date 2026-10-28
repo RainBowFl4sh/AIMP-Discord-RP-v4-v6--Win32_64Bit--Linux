@@ -1,0 +1,3 @@
+LIBRARY aimp_discord_rpc
+EXPORTS
+    AIMPPluginGetHeader

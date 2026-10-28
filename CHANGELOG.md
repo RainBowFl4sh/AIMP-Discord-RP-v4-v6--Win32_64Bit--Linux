@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.6.3
+
+### Fixed
+- **Covers from Ogg / Opus, WMA, APE, WavPack and other files**: the cover in their tags was not read (only MP3,
+  FLAC and M4A were). The plugin now asks AIMP for it, which reads the tags of every format it plays
+- **Speed and tempo in AIMP's DSP manager**: Discord's progress bar now runs as fast as the track plays (at 125 % a
+  4:00 track takes 3:12). Until now the presence was sent again every 2 seconds, because AIMP kept running ahead of
+  Discord's counter. Should AIMP drift away for another reason, the presence is corrected the first times at once,
+  then at most every 15 seconds
+- **Update check**: when GitHub's limit for requests without an account is used up (60 per hour, shared by everyone
+  behind the same address - VPN, university, company), the new version is now found through GitHub's release feed.
+  If that fails too, the *About* tab says so instead of showing "error 403"
+
+### Changed
+- *Cover art* tab: "Cover in the tags (MP3 / FLAC / M4A)" is now "Cover in the file's tags"
+
+### Under the hood
+- *Send test presence* sends its time in milliseconds like the normal presence
+- Builds on GitHub: time limits and download retries, so a stuck package server cannot hold a build for hours;
+  newer versions of GitHub's checkout / artifact actions
+
 ## 1.6.2
 
 ### New
