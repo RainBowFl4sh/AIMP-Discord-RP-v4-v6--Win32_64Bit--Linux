@@ -1,10 +1,15 @@
 name: Build
 on: [push, pull_request, workflow_dispatch]
 
+# The jobs only read the code; artifacts are uploaded without the GITHUB_TOKEN.
+permissions:
+  contents: read
+
 jobs:
   windows:
     name: Windows ${{ matrix.arch }} (MSVC)
     runs-on: windows-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -14,7 +19,7 @@ jobs:
           - arch: x86
             cmake_arch: Win32
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Configure
         run: cmake -S . -B build -A ${{ matrix.cmake_arch }} -DAIMP_SDK_DIR="${{ github.workspace }}/sdk"
       - name: Build
@@ -23,7 +28,7 @@ jobs:
         run: |
           pip install pefile
           python -c "import pefile,sys; pe=pefile.PE('build/Release/aimp_discord_rpc.dll'); n=[e.name.decode() for e in pe.DIRECTORY_ENTRY_EXPORT.symbols]; print(n); sys.exit(0 if 'AIMPPluginGetHeader' in n else 1)"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: aimp_discord_rpc-windows-${{ matrix.arch }}
           path: build/Release/aimp_discord_rpc.dll
@@ -32,10 +37,14 @@ jobs:
     name: Linux x86_64 (native AIMP for Linux)
     # oldest supported runner -> low glibc requirement, the .so runs on more distributions
     runs-on: ubuntu-22.04
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libcairo2-dev fonts-dejavu-core
+        timeout-minutes: 15
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 install -y libcurl4-openssl-dev libcairo2-dev fonts-dejavu-core
       - name: Check the language files
         run: python3 tests/check_langs.py
       - name: Build
@@ -50,11 +59,11 @@ jobs:
           bash tools/build_linux_portable.sh build portable/aimp_discord_rpc.so
           cp build/host_test build/template_test portable/
           bash tests/run_linux_test.sh portable
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: aimp_discord_rpc-linux-x86_64
           path: portable/aimp_discord_rpc.so
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: test-previews-linux
           path: previews-linux
@@ -62,13 +71,16 @@ jobs:
   wine:
     name: Windows DLLs under Wine (x86 + x64)
     runs-on: ubuntu-24.04
+    # a stuck package mirror once held this job for 2.5 hours (1.6.2): fail instead, a re-run usually works
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install MinGW + Wine
+        timeout-minutes: 25
         run: |
           sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mingw-w64 wine wine64 wine32:i386 xvfb xauth
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 install -y --no-install-recommends mingw-w64 wine wine64 wine32:i386 xvfb xauth
       - name: Build (MinGW cross-compile)
         run: |
           for arch in x64 x86; do
@@ -79,7 +91,7 @@ jobs:
         run: bash tests/run_wine_test.sh build-x64 previews-wine-x64
       - name: Test x86 under Wine
         run: bash tests/run_wine_test.sh build-x86 previews-wine-x86
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: test-previews-wine
           path: previews-wine-*
@@ -88,9 +100,10 @@ jobs:
     name: Package (.aimppack with x86 + x64 + Linux)
     needs: [windows, linux]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
       - name: Build aimp_discord_rpc.aimppack
@@ -100,7 +113,7 @@ jobs:
             --x64 artifacts/aimp_discord_rpc-windows-x64/aimp_discord_rpc.dll \
             --linux artifacts/aimp_discord_rpc-linux-x86_64/aimp_discord_rpc.so \
             --out aimp_discord_rpc.aimppack
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: aimp_discord_rpc.aimppack
           path: aimp_discord_rpc.aimppack
