@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.4
+
+### Fixed
+- **Cover upload to x0.at**: x0.at now refuses files named "cover.jpg" ("403 File type not allowed"), so every
+  local cover went to catbox.moe instead, whose pictures Discord often fails to load. Uploads now get a random name.
+  A failed x0.at upload writes x0.at's answer to the log
+
 ## 1.6.3
 
 ### Fixed

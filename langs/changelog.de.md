@@ -1,5 +1,12 @@
 # Änderungen
 
+## 1.6.4
+
+### Behoben
+- **Cover-Upload zu x0.at**: x0.at lehnt Dateien mit dem Namen „cover.jpg“ inzwischen ab („403 File type not
+  allowed“). Dadurch landete jedes lokale Cover bei catbox.moe, dessen Bilder Discord oft nicht laden kann. Uploads
+  bekommen jetzt einen zufälligen Namen. Schlägt der Upload zu x0.at fehl, steht die Antwort von x0.at im Log
+
 ## 1.6.3
 
 ### Behoben

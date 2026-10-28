@@ -1,4 +1,4 @@
-# AIMP Discord Rich Presence 1.6.3 for AIMP 4, 5 and 6 (Windows x86 / x64 + Linux)
+# AIMP Discord Rich Presence 1.6.4 for AIMP 4, 5 and 6 (Windows x86 / x64 + Linux)
 
 Discord Rich Presence plugin for AIMP 4, 5 and 6 (AIMP 3 with limitations) with its own settings tab inside AIMP's preferences -
 on Windows **and** Linux, in English, German, Russian and Ukrainian, with a live preview, update check and
@@ -374,6 +374,9 @@ optional. Bug reports and translations on GitHub help just as much.
 The full list of changes is in [CHANGELOG.md](CHANGELOG.md) (also in [Deutsch](langs/changelog.de.md),
 [Русский](langs/changelog.ru.md) and [Українська](langs/changelog.uk.md) - Russian and Ukrainian translated with AI)
 and on the plugin's *About* tab.
+
+**1.6.4** - Fixed: local covers could not be uploaded to **x0.at** any more (the service now refuses the file name
+`cover.jpg`); the plugin fell back to catbox.moe, whose pictures Discord often fails to load.
 
 **1.6.3** - Covers in the tags of **Ogg / Opus, WMA, APE, WavPack** and other files are read (through AIMP).
 Discord's progress bar follows AIMP's **speed / tempo** (DSP manager) instead of being sent again every 2 seconds. The

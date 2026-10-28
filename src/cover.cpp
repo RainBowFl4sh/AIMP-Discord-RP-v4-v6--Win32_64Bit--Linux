@@ -15,6 +15,7 @@ using std::max;
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <random>
 #include <vector>
 
 #include "util.h"
@@ -410,8 +411,12 @@ std::string Multipart(const std::string& boundary, const std::vector<std::pair<s
     std::string body;
     for (auto& f : fields)
         body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + f.first + "\"\r\n\r\n" + f.second + "\r\n";
+    // a random name: x0.at refuses "cover.jpg" ("403 File type not allowed.", October 2026)
+    static std::mt19937 rng(std::random_device{}() ^ (uint32_t)util::TickMs());
+    std::string name;
+    for (int i = 0; i < 10; ++i) name += "abcdefghijklmnopqrstuvwxyz0123456789"[rng() % 36];
     std::string ext = ImageExt(file);
-    body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + fileField + "\"; filename=\"cover." + ext +
+    body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + fileField + "\"; filename=\"" + name + "." + ext +
             "\"\r\nContent-Type: image/" + (ext == "png" ? "png" : "jpeg") + "\r\n\r\n";
     body.append(reinterpret_cast<const char*>(file.data()), file.size());
     body += "\r\n--" + boundary + "--\r\n";
@@ -490,7 +495,10 @@ std::string X0Upload(const Bytes& image) {
                                    {L"Content-Type: multipart/form-data; boundary=" + util::FromUtf8(boundary)}, body);
     std::string url = util::ToUtf8(util::Trim(util::FromUtf8(r.body)));
     if (r.status != 200 || url.rfind("https://", 0) != 0 || url.find_first_of(" <\r\n") != std::string::npos) {
-        util::Log(L"x0.at upload failed (HTTP %d)", r.status);
+        std::wstring answer = util::FromUtf8(url.substr(0, 120));   // e.g. "403 Forbidden File type not allowed."
+        for (wchar_t& ch : answer)
+            if (ch < 32) ch = L' ';
+        util::Log(L"x0.at upload failed (HTTP %d): %ls", r.status, answer.empty() ? L"no answer" : answer.c_str());
         return std::string();
     }
     return url;

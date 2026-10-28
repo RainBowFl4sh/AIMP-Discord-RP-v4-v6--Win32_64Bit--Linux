@@ -206,7 +206,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(status, answer, "text/html; charset=UTF-8")
         if self.path.split("?")[0] in ("/x0.at", "/x0.at/"):
             body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-            ok = b'name="file"; filename="cover.' in body
+            ok = b'name="file"; filename="' in body
+            if b'filename="cover.' in body:   # the real x0.at refuses this name (October 2026)
+                with open(self.server.log, "a") as f:
+                    f.write(f"{self.path} {len(body)} -> 403 File type not allowed.\n")
+                return self.reply(403, b"403 Forbidden\nFile type not allowed.\n", "text/plain")
             with open(self.server.log, "a") as f:
                 f.write(f"{self.path} {len(body)} -> {'https://x0.at/T3st.png' if ok else '(nothing)'}\n")
             return self.reply(200 if ok else 400, b"https://x0.at/T3st.png\n" if ok else b"no file", "text/plain")
