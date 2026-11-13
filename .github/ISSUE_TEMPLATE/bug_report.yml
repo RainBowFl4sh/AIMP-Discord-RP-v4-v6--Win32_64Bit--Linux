@@ -12,7 +12,7 @@ body:
     attributes:
       label: Plugin version
       description: Shown on the *About* tab
-      placeholder: "1.6.3"
+      placeholder: "1.6.5"
     validations:
       required: true
   - type: dropdown
