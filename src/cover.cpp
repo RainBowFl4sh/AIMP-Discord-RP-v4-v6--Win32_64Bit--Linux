@@ -14,6 +14,7 @@ using std::max;
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <cwctype>
 #include <functional>
 #include <random>
 #include <vector>
@@ -385,13 +386,11 @@ std::wstring Enc(const std::string& s) { return util::FromUtf8(util::UrlEncode(s
 
 using util::JsonAfter;
 using util::JsonNumber;
-std::string Norm(const std::string& s) {   // lower-case, letters/digits only (UTF-8 bytes kept)
-    std::string o;
-    for (unsigned char c : s) {
-        if (c >= 0x80) o += (char)c;
-        else if (isalnum(c)) o += (char)tolower(c);
-    }
-    return o;
+std::string Norm(const std::string& s) {   // lower-case (also Ä, Cyrillic, ...), letters/digits only
+    std::wstring o;
+    for (wchar_t c : util::Lower(util::FromUtf8(s)))
+        if ((unsigned)c >= 0x80 || (c >= L'a' && c <= L'z') || (c >= L'0' && c <= L'9')) o += c;
+    return util::ToUtf8(o);
 }
 // guards against wrong covers: the artist of the hit must roughly match ours
 bool Plausible(const std::string& found, const std::string& wanted) {
@@ -529,10 +528,16 @@ std::string ImgurUpload(const Bytes& image, const std::wstring& clientId) {
 
 // ---------------------------------------------------------------- Deezer (public API, no key)
 
-std::string DeezerQuery(const std::string& endpoint, const std::string& q) {
+std::string DeezerQuery(const std::string& endpoint, const std::string& q, const std::string& artist) {
     std::wstring url = L"https://api.deezer.com/search" + util::FromUtf8(endpoint) + L"?limit=1&q=" + Enc(q);
     web::Response r = web::Request(L"GET", url, {}, std::string());
     if (r.status != 200 || r.body.find("\"data\":[]") != std::string::npos) return std::string();
+    // like the other sources: the hit's artist must roughly match ours (Deezer's free search finds anything)
+    if (!Plausible(JsonAfter(r.body, "\"artist\"", "name"), artist)) {
+        util::Log(L"Deezer: hit by another artist (%ls) - not used",
+                  util::FromUtf8(JsonAfter(r.body, "\"artist\"", "name")).c_str());
+        return std::string();
+    }
     std::string cover = util::JsonGetString(r.body, "cover_xl");
     if (cover.empty()) cover = util::JsonGetString(r.body, "cover_big");
     if (cover.find("/cover//") != std::string::npos) return std::string();  // Deezer's "no cover" placeholder
@@ -542,11 +547,11 @@ std::string DeezerQuery(const std::string& endpoint, const std::string& q) {
 std::string DeezerLookup(const Query& q) {
     std::string url;
     if (!q.album.empty() && !q.artist.empty())
-        url = DeezerQuery("/album", "artist:\"" + q.artist + "\" album:\"" + q.album + "\"");
+        url = DeezerQuery("/album", "artist:\"" + q.artist + "\" album:\"" + q.album + "\"", q.artist);
     if (url.empty() && !q.title.empty() && !q.trackArtist.empty())
-        url = DeezerQuery("/track", "artist:\"" + q.trackArtist + "\" track:\"" + q.title + "\"");
+        url = DeezerQuery("/track", "artist:\"" + q.trackArtist + "\" track:\"" + q.title + "\"", q.trackArtist);
     if (url.empty() && !q.album.empty() && !q.artist.empty())
-        url = DeezerQuery("/album", q.artist + " " + q.album);
+        url = DeezerQuery("/album", q.artist + " " + q.album, q.artist);
     return url;
 }
 
@@ -596,15 +601,18 @@ std::string BandcampLookup(const Query& q) {
 
 // ---------------------------------------------------------------- MusicBrainz + Cover Art Archive (no key)
 
+// a phrase in MusicBrainz' (Lucene) search: '"' is removed already (Quoteless), a '\\' would escape the closing quote
+std::string Phrase(const std::string& s) { return "\"" + util::ToUtf8(util::ReplaceAll(util::FromUtf8(s), L"\\", L"\\\\")) + "\""; }
+
 std::string MusicBrainzLookup(const Query& q) {
     if (q.artist.empty() || (q.album.empty() && q.title.empty())) return std::string();
     std::string lucene;
     std::wstring url;
     if (!q.album.empty()) {
-        lucene = "releasegroup:\"" + q.album + "\" AND artist:\"" + q.artist + "\"";
+        lucene = "releasegroup:" + Phrase(q.album) + " AND artist:" + Phrase(q.artist);
         url = L"https://musicbrainz.org/ws/2/release-group/?fmt=json&limit=1&query=" + Enc(lucene);
     } else {
-        lucene = "recording:\"" + q.title + "\" AND artist:\"" + q.trackArtist + "\"";
+        lucene = "recording:" + Phrase(q.title) + " AND artist:" + Phrase(q.trackArtist);
         url = L"https://musicbrainz.org/ws/2/recording/?fmt=json&limit=1&query=" + Enc(lucene);
     }
     web::Response r = web::Request(L"GET", url, {L"Accept: application/json"}, std::string());
@@ -701,15 +709,42 @@ std::string SpotifyLookup(const Query& q, const Config& cfg) {
 
 // ---------------------------------------------------------------- cache key
 
+// the local picture of a track that would be uploaded: from the tags (own reader, else what AIMP read), else the
+// image in the track's folder. 'from' = "embedded" / "folder".
+bool LocalArt(const TrackInfo& t, const Config& cfg, Bytes& art, const char*& from) {
+    art.clear();
+    from = "embedded";
+    if (t.fileName.empty() || util::IsUrl(t.fileName)) return false;
+    if (cfg.srcEmbedded) ExtractEmbedded(t.fileName, art);
+    if (art.empty() && cfg.srcEmbedded && t.art && LooksLikeImage(*t.art)) art = *t.art;   // read by AIMP
+    if (art.empty() && cfg.srcFolder && FindFolderImage(util::DirName(t.fileName), cfg.coverNames, art)) from = "folder";
+    return !art.empty();
+}
+
+// fingerprint of a local picture (FNV-1a, hex): an uploaded cover is uploaded again when the picture changed
+std::string Print(const Bytes& b) {
+    uint64_t h = 1469598103934665603ull;
+    for (uint8_t c : b) h = (h ^ c) * 1099511628211ull;
+    char buf[24];
+    snprintf(buf, sizeof buf, "%016llx", (unsigned long long)h);
+    return buf;
+}
+
+// lower case as before 1.6.5 (A-Z only): the keys of covers cached by older versions stay the same
+std::wstring KeyLower(std::wstring s) {
+    for (wchar_t& c : s) c = (wchar_t)towlower(c);
+    return s;
+}
+
 std::string KeyOf(const TrackInfo& t) {
     std::wstring key;
-    std::wstring a = util::Lower(t.albumArtist.empty() ? t.artist : t.albumArtist);
+    std::wstring a = KeyLower(t.albumArtist.empty() ? t.artist : t.albumArtist);
     if (!t.album.empty())
-        key = L"a|" + a + L"|" + util::Lower(t.album);
+        key = L"a|" + a + L"|" + KeyLower(t.album);
     else if (!t.fileName.empty() && !util::IsUrl(t.fileName))
-        key = L"f|" + util::Lower(t.fileName);
+        key = L"f|" + KeyLower(t.fileName);
     else
-        key = L"t|" + util::Lower(t.artist) + L"|" + util::Lower(t.title);
+        key = L"t|" + KeyLower(t.artist) + L"|" + KeyLower(t.title);
     char buf[24];
     snprintf(buf, sizeof buf, "%016llx", (unsigned long long)util::Fnv1a(key));
     return buf;
@@ -724,7 +759,7 @@ CoverResolver::CoverResolver() {
     LoadCache();
 }
 
-// one line per cover: key <TAB> url [<TAB> source [<TAB> unix time]]
+// one line per cover: key <TAB> url [<TAB> source [<TAB> unix time [<TAB> fingerprint of the uploaded picture]]]
 void CoverResolver::LoadCache() {
     std::lock_guard<std::mutex> lk(mu_);
     std::string data;
@@ -744,7 +779,11 @@ void CoverResolver::LoadCache() {
         if (tab2 != std::string::npos) {
             size_t tab3 = line.find('\t', tab2 + 1);
             r.source = line.substr(tab2 + 1, tab3 == std::string::npos ? std::string::npos : tab3 - tab2 - 1);
-            if (tab3 != std::string::npos) r.stored = atoll(line.c_str() + tab3 + 1);
+            if (tab3 != std::string::npos) {
+                r.stored = atoll(line.c_str() + tab3 + 1);
+                size_t tab4 = line.find('\t', tab3 + 1);
+                if (tab4 != std::string::npos) r.print = line.substr(tab4 + 1);
+            }
         }
         cache_[line.substr(0, tab)] = r;
     }
@@ -760,7 +799,9 @@ void CoverResolver::StoreCache(const std::string& key, const CoverResult& r) {
     cache_[key] = r;
     negative_.erase(key);
     if (FILE* f = util::OpenFile(path_, "ab")) {
-        std::string line = key + "\t" + r.url + "\t" + r.source + "\t" + std::to_string(r.stored) + "\n";
+        std::string line = key + "\t" + r.url + "\t" + r.source + "\t" + std::to_string(r.stored);
+        if (!r.print.empty()) line += "\t" + r.print;
+        line += "\n";
         fwrite(line.data(), 1, line.size(), f);
         fclose(f);
     }
@@ -798,25 +839,43 @@ CoverResult CoverResolver::PeekCache(const TrackInfo& t) {
     return it == cache_.end() ? CoverResult() : it->second;
 }
 
-CoverResult CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
+CoverResult CoverResolver::Resolve(const TrackInfo& t, const Config& cfg, bool verify) {
     if (!cfg.coverEnabled) return CoverResult();
     const std::string key = KeyOf(t);
     {
         std::lock_guard<std::mutex> lk(mu_);
         auto it = cache_.find(key);
         // an uploaded cover older than 3 days is checked once per session: upload hosts delete files (x0.at
-        // after a while) or break (catbox.moe); a dead link is looked up / uploaded again
+        // after a while) or break (catbox.moe); a dead link is looked up / uploaded again.
+        // verify (cover of the next track, prepared in advance): every cached cover is checked once per session -
+        // the link still delivers a picture, and an uploaded one is still the picture of the file / folder
         const bool uploaded = it != cache_.end() && it->second.source.find('|') != std::string::npos;
-        const bool old = uploaded && util::UnixTime() - it->second.stored > 3 * 86400 && !checked_[key];
+        const bool old = it != cache_.end() && !checked_[key] &&
+                         (verify || (uploaded && util::UnixTime() - it->second.stored > 3 * 86400));
         if (it != cache_.end() && !old) return it->second;
         if (old) {
             const CoverResult cached = it->second;
             checked_[key] = true;
             mu_.unlock();
-            const bool alive = ImageReachable(cached.url);
+            bool alive = true;
+            if (uploaded && !cached.print.empty()) {
+                Bytes art;
+                const char* from = nullptr;
+                if (LocalArt(t, cfg, art, from) && Print(art) != cached.print) {
+                    util::Log(L"The cover of this album changed - uploading it again");
+                    alive = false;
+                }
+            }
+            if (alive) alive = ImageReachable(cached.url);
             mu_.lock();
             if (alive) return cached;
-            util::Log(L"Cached cover is gone (%ls) - looking it up again", util::FromUtf8(cached.url).c_str());
+            if (web::Cancelled()) {   // not checked after all: next time again
+                checked_.erase(key);
+                CoverResult r;
+                r.cancelled = true;
+                return r;
+            }
+            util::Log(L"Cached cover is gone or changed (%ls) - looking it up again", util::FromUtf8(cached.url).c_str());
             cache_.erase(key);
         }
         auto n = negative_.find(key);
@@ -829,14 +888,10 @@ CoverResult CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
     // a) local cover (tags / folder) -> public upload host
     auto uploadLocal = [&]() -> CoverResult {
         CoverResult r;
-        const bool isLocalFile = !t.fileName.empty() && !util::IsUrl(t.fileName);
-        if (!isLocalFile || cfg.uploadHost == 0 || !(cfg.srcEmbedded || cfg.srcFolder)) return r;
+        if (cfg.uploadHost == 0 || !(cfg.srcEmbedded || cfg.srcFolder)) return r;
         Bytes art;
         const char* from = "embedded";
-        if (cfg.srcEmbedded) ExtractEmbedded(t.fileName, art);
-        if (art.empty() && cfg.srcEmbedded && t.art && LooksLikeImage(*t.art)) art = *t.art;   // read by AIMP
-        if (art.empty() && cfg.srcFolder && FindFolderImage(util::DirName(t.fileName), cfg.coverNames, art)) from = "folder";
-        if (art.empty()) return r;
+        if (!LocalArt(t, cfg, art, from)) return r;
         Bytes upload = ToJpeg(art, 512);
         if (upload.empty() && IsJpegOrPng(art) && art.size() <= (5u << 20)) upload = art;  // GDI+ failed / Linux: raw
         if (upload.empty()) return r;
@@ -847,19 +902,23 @@ CoverResult CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
         int order[3] = {cfg.uploadHost, cfg.uploadHost == 3 ? 1 : 3, -1};
         if (cfg.uploadHost == 2 && cfg.imgurClientId.empty()) order[0] = 3, order[1] = 1;
         for (int host : order) {
-            if (host <= 0) continue;
+            if (host <= 0 || web::Cancelled()) continue;
             {
                 std::lock_guard<std::mutex> lk(hostMu);
                 auto f = failedAt.find(host);
                 if (f != failedAt.end() && util::TickMs() - f->second < 30ull * 60 * 1000) continue;
             }
             const char* name = host == 2 ? "Imgur" : host == 3 ? "x0.at" : "catbox.moe";
-            std::string url = host == 2 ? ImgurUpload(upload, cfg.imgurClientId)
-                            : host == 3 ? X0Upload(upload) : CatboxUpload(upload);
-            if (!url.empty() && !ImageReachable(url)) {
-                util::Log(L"%ls: the uploaded cover cannot be loaded (%ls) - not used",
-                          util::FromUtf8(name).c_str(), util::FromUtf8(url).c_str());
-                url.clear();
+            std::string url;
+            {   // an upload once started is finished (and checked): stopping it halfway would only upload it twice
+                web::CancelScope finish{std::function<bool()>()};
+                url = host == 2 ? ImgurUpload(upload, cfg.imgurClientId)
+                    : host == 3 ? X0Upload(upload) : CatboxUpload(upload);
+                if (!url.empty() && !ImageReachable(url)) {
+                    util::Log(L"%ls: the uploaded cover cannot be loaded (%ls) - not used",
+                              util::FromUtf8(name).c_str(), util::FromUtf8(url).c_str());
+                    url.clear();
+                }
             }
             if (url.empty()) {
                 std::lock_guard<std::mutex> lk(hostMu);
@@ -868,6 +927,7 @@ CoverResult CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
             }
             r.url = url;
             r.source = std::string(from) + "|" + name;
+            r.print = Print(art);
             util::Log(L"Cover uploaded to %ls: %ls", util::FromUtf8(name).c_str(), util::FromUtf8(url).c_str());
             break;
         }
@@ -886,7 +946,7 @@ CoverResult CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
             {cfg.srcMusicBrainz, "MusicBrainz", [&] { return MusicBrainzLookup(q); }},
         };
         for (const Src& s : sources) {
-            if (!s.on) continue;
+            if (!s.on || web::Cancelled()) continue;
             std::string u = s.fn();
             if (!u.empty() && u.size() <= 256) {
                 util::Log(L"Cover found on %ls", util::FromUtf8(s.name).c_str());
@@ -901,6 +961,11 @@ CoverResult CoverResolver::Resolve(const TrackInfo& t, const Config& cfg) {
     if (res.url.empty() && !cfg.preferLocal) res = uploadLocal();
     if (res.url.size() > 256) res.url.clear();  // Discord limit for image keys / URLs
 
+    if (res.url.empty() && web::Cancelled()) {   // stopped for something more urgent: not "nothing found"
+        res = CoverResult();
+        res.cancelled = true;
+        return res;
+    }
     if (!res.url.empty()) {
         res.stored = util::UnixTime();
         StoreCache(key, res);

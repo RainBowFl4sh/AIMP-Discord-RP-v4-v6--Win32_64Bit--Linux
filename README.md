@@ -1,4 +1,4 @@
-# AIMP Discord Rich Presence 1.6.4 for AIMP 4, 5 and 6 (Windows x86 / x64 + Linux)
+# AIMP Discord Rich Presence 1.6.5 for AIMP 4, 5 and 6 (Windows x86 / x64 + Linux)
 
 Discord Rich Presence plugin for AIMP 4, 5 and 6 (AIMP 3 with limitations) with its own settings tab inside AIMP's preferences -
 on Windows **and** Linux, in English, German, Russian and Ukrainian, with a live preview, update check and
@@ -41,6 +41,8 @@ In the member list:
     catbox.moe or Imgur (Client-ID); every upload is checked, and if a host fails another one stands in
   - online lookup without upload: **Spotify** (free developer app), **Deezer**, **Apple Music / iTunes**, **Bandcamp**, **Discogs** (free token), **MusicBrainz + Cover Art Archive**
   - artist check against every hit to avoid wrong covers; covers are cached on disk
+  - the cover of the track AIMP plays next (queue or playlist order) is prepared while the current one plays, so
+    Discord shows it right when that track starts
 - AIMP logo as fallback if no cover is found
 - Clickable song title: opens a YouTube search for artist + title (own link optional)
 - Optional: two buttons under the presence (e.g. lyrics / Spotify search for the current track), advanced templates
@@ -199,7 +201,7 @@ A comma, bracket or `%` that should appear as text is written `\,` `\(` `\)` `\%
 per line, longer results are cut.
 
 **Cover art** - local covers (tags / folder image), upload host (x0.at, catbox.moe or Imgur - *Get ID* opens the Imgur
-page for the Client-ID), cover cache, and the
+page for the Client-ID), preparing the next track's cover in advance, cover cache, and the
 **current cover** with its source and a link to the image
 
 **Sources** - cover lookup on Spotify, Deezer, Apple Music / iTunes, Bandcamp, Discogs, MusicBrainz
@@ -346,6 +348,9 @@ The presence looks the same for everyone: Discord loads the public cover URL its
 - Uploaded covers (x0.at / catbox.moe / Imgur) are reachable by anyone who has the link. Uploading can be turned off in the *Cover art* tab.
 - Online lookups match by artist + album / title, so wrong or missing covers are possible for obscure releases.
 - Discord limits updates, so changes are combined (max. one update every 2 seconds).
+- The next track's cover is looked up / uploaded in advance (*Cover art -> Prepare the next track's cover*). A cover
+  from the cache is checked once per session; an uploaded one is uploaded again when the picture changed. With
+  shuffle AIMP may pick another track later - then that one simply gets its cover when it starts.
 - With AIMP's speed / tempo changed, Discord's progress bar shows the real playing time (125 %: a 4:00 track shows 3:12).
 - While music plays and PreMiD is active at the same time, Discord shows both activities; Discord decides the order.
 - Network access: the cover sources above, `api.github.com` / `github.com` for the update check (can be switched
@@ -374,6 +379,10 @@ optional. Bug reports and translations on GitHub help just as much.
 The full list of changes is in [CHANGELOG.md](CHANGELOG.md) (also in [Deutsch](langs/changelog.de.md),
 [Русский](langs/changelog.ru.md) and [Українська](langs/changelog.uk.md) - Russian and Ukrainian translated with AI)
 and on the plugin's *About* tab.
+
+**1.6.5** - The **next track's cover is prepared in advance** (AIMP's queue / playlist order), so Discord shows it
+right when the track starts; a slow cover source no longer holds up Discord's updates; no more wrong covers from
+Deezer (artist check); upper / lower case also for umlauts, Cyrillic and Greek (cover lookup, filters, rules).
 
 **1.6.4** - Fixed: local covers could not be uploaded to **x0.at** any more (the service now refuses the file name
 `cover.jpg`); the plugin fell back to catbox.moe, whose pictures Discord often fails to load.

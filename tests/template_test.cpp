@@ -141,10 +141,10 @@ int main() {
         {"german.lng", kLangDe, sizeof kLangDe, "Tpl.ListEscape="},
         {"russian.lng", kLangRu, sizeof kLangRu, "Tpl.ListEscape="},
         {"ukrainian.lng", kLangUk, sizeof kLangUk, "Tpl.ListEscape="},
-        {"CHANGELOG.md", kChangelog, sizeof kChangelog, "## 1.6.4"},
-        {"changelog.de.md", kChangelogDe, sizeof kChangelogDe, "## 1.6.4"},
-        {"changelog.ru.md", kChangelogRu, sizeof kChangelogRu, "## 1.6.4"},
-        {"changelog.uk.md", kChangelogUk, sizeof kChangelogUk, "## 1.6.4"}};
+        {"CHANGELOG.md", kChangelog, sizeof kChangelog, "## 1.6.5"},
+        {"changelog.de.md", kChangelogDe, sizeof kChangelogDe, "## 1.6.5"},
+        {"changelog.ru.md", kChangelogRu, sizeof kChangelogRu, "## 1.6.5"},
+        {"changelog.uk.md", kChangelogUk, sizeof kChangelogUk, "## 1.6.5"}};
     for (const auto& p : packed) {
         std::string text;
         if (!inflate::Gunzip(p.data, p.size, text) || text.find(p.must) == std::string::npos || text.size() < p.size * 2) {
@@ -174,6 +174,17 @@ int main() {
     if (inflate::Gunzip(broken, sizeof broken, out) || inflate::Gunzip(fixedGz, 20, out) || !out.empty()) {
         ++g_failed;
         std::printf("FAILED damaged gzip data was accepted\n");
+    }
+
+    // 1.6.5: upper / lower case also for umlauts, Cyrillic (Ukrainian too) and Greek - filters, rules, cover lookups
+    Eq("lower latin-1", util::Lower(L"M\u00D6TLEY CR\u00DCE \u00C0\u00DE"), L"m\u00F6tley cr\u00FCe \u00E0\u00FE");
+    Eq("lower cyrillic", util::Lower(L"\u041B\u0415\u041D\u0418\u041D\u0413\u0420\u0410\u0414 \u0404\u0406\u0407\u0490\u0401"),
+       L"\u043B\u0435\u043D\u0438\u043D\u0433\u0440\u0430\u0434 \u0454\u0456\u0457\u0491\u0451");
+    Eq("lower greek / latin ext.", util::Lower(L"\u0391\u03A9 \u0141\u00D7\u0179\u0178"), L"\u03B1\u03C9 \u0142\u00D7\u017A\u00FF");
+    Eq("lower keeps lower case", util::Lower(L"\u00FF\u0432\u0151\u0142"), L"\u00FF\u0432\u0151\u0142");
+    if (!util::MatchesAny(L"\u0420\u041E\u041A \u0438 \u043F\u0430\u043D\u043A", L"jazz; \u0440\u043E\u043A")) {   // rule "genre contains"
+        ++g_failed;
+        std::printf("FAILED Cyrillic text did not match without case\n");
     }
 
     std::printf(g_failed ? "template test: %d FAILED\n" : "template test: all OK\n", g_failed);

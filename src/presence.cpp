@@ -9,6 +9,7 @@
 #include "template.h"
 #include "util.h"
 #include "version.h"
+#include "web.h"
 
 namespace {
 
@@ -264,13 +265,19 @@ void PresenceWorker::Start() {
     if (thread_.joinable()) return;
     stop_ = false;
     thread_ = std::thread(&PresenceWorker::Run, this);
+    coverThread_ = std::thread(&PresenceWorker::RunCovers, this);
 }
 
 void PresenceWorker::Stop() {
     if (!thread_.joinable()) return;
     stop_ = true;
     Wake();
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        coverCv_.notify_all();
+    }
     thread_.join();
+    if (coverThread_.joinable()) coverThread_.join();
 }
 
 void PresenceWorker::Submit(const Snapshot& s) {
@@ -280,6 +287,13 @@ void PresenceWorker::Submit(const Snapshot& s) {
         dirty_ = true;
     }
     Wake();
+}
+
+void PresenceWorker::Prefetch(const TrackInfo& next) {
+    std::lock_guard<std::mutex> lk(mu_);
+    prefetch_ = next;
+    prefetchPending_ = true;
+    coverCv_.notify_one();
 }
 
 void PresenceWorker::Refresh() {
@@ -423,6 +437,93 @@ std::string PresenceWorker::TestActivity(const Config& c) {
 
 // ---------------------------------------------------------------------------------------------------------------
 
+// The cover thread: first the current track's lookup, then (when nothing else is to do) the next track's cover.
+// A lookup that is no longer wanted (another track, a newer request, AIMP closes) stops at the next request
+// (Linux: also in the middle of one; Windows: the main thread closes it, see web::CheckCancels).
+void PresenceWorker::RunCovers() {
+    for (;;) {
+        CoverJob job;
+        bool next = false;
+        {
+            std::unique_lock<std::mutex> lk(mu_);
+            coverCv_.wait(lk, [this] { return stop_ || coverJobPending_ || prefetchPending_; });
+            if (stop_) return;
+            if (coverJobPending_) {
+                job = coverJob_;
+                coverJobPending_ = false;
+            } else {
+                next = true;
+                job.track = prefetch_;
+                job.cfg = config::Get();
+                job.verify = true;
+                prefetchPending_ = false;
+            }
+            coverBusy_ = true;
+        }
+        CoverResult r;
+        if (!next || (job.cfg.coverEnabled && job.cfg.coverPrefetch)) {
+            const uint64_t serial = job.serial, id = job.id;
+            web::CancelScope cancel([this, next, serial, id] {
+                if (stop_) return true;
+                std::lock_guard<std::mutex> lk(mu_);
+                if (next) return coverJobPending_;   // the current track goes first
+                return coverJobPending_ || coverSerial_ != serial || snap_.trackId != id;
+            });
+            r = cover_.Resolve(job.track, job.cfg, job.verify);
+        }
+        std::lock_guard<std::mutex> lk(mu_);
+        coverBusy_ = false;
+        if (next) {
+            if (r.cancelled) {   // later again, unless AIMP named another next track meanwhile
+                if (!prefetchPending_ && !stop_) {
+                    prefetch_ = job.track;
+                    prefetchPending_ = true;
+                }
+                continue;
+            }
+            if (!job.cfg.coverEnabled || !job.cfg.coverPrefetch) continue;
+            const TrackInfo& t = job.track;
+            const std::wstring who = t.artist.empty() ? t.title : t.artist + L" - " + t.title;
+            if (r.url.empty()) util::Log(L"Next track (%ls): no cover found", who.c_str());
+            else util::Log(L"Next track (%ls): cover ready (%ls)", who.c_str(), util::FromUtf8(r.source).c_str());
+            continue;
+        }
+        if (job.serial != coverSerial_) continue;   // a newer request is on its way
+        coverDone_ = true;
+        coverDoneId_ = job.id;
+        coverDoneResult_ = r;
+        wake_ = true;
+        wakeCv_.notify_one();
+    }
+}
+
+void PresenceWorker::TakeCoverResult() {
+    CoverResult r;
+    uint64_t id = 0;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (!coverDone_) return;
+        coverDone_ = false;
+        r = coverDoneResult_;
+        id = coverDoneId_;
+    }
+    if (id == searchingFor_) searchingFor_ = 0;
+    if (id != coverTrackId_) return;   // for a track that is over
+    st_.coverSearching = false;
+    if (r.cancelled) {
+        util::Log(L"Cover search stopped - looked up again");
+        coverTrackId_ = 0;
+    } else {
+        st_.coverUrl = r.url;
+        st_.coverSource = r.source;
+        if (!r.url.empty()) {
+            std::lock_guard<std::mutex> lk(mu_);
+            if (snap_.trackId == id) dirty_ = true;   // resend with the cover
+        }
+    }
+    SetStatus(st_);
+}
+
 void PresenceWorker::Run() {
     using namespace std::chrono;
 
@@ -507,6 +608,7 @@ void PresenceWorker::Run() {
             util::Log(L"Disconnected from Discord");
             continue;
         }
+        TakeCoverResult();
         CheckShownCover(now);
         st_.kind = PresenceStatus::Connected;
         st_.error = IpcError::None;
@@ -609,21 +711,21 @@ void PresenceWorker::Run() {
         sentStep_ = RotationStep(cfg);
         st_.lastSent = util::UnixTime();
         st_.visible = shown_;
-        st_.coverSearching = show && needResolve;
+        if (!show && needResolve) coverTrackId_ = 0;   // looked up once it is shown
+        if (show && needResolve) searchingFor_ = snap.trackId;
+        st_.coverSearching = searchingFor_ != 0 && searchingFor_ == coverTrackId_;
         SetStatus(st_);
 
-        if (show && needResolve) {
-            CoverResult r = cover_.Resolve(snap.track, cfg);
-            st_.coverSearching = false;
-            if (coverTrackId_ == snap.trackId) {
-                st_.coverUrl = r.url;
-                st_.coverSource = r.source;
-                if (!r.url.empty()) {
-                    std::lock_guard<std::mutex> lk(mu_);
-                    if (snap_.trackId == snap.trackId) dirty_ = true;   // resend with the cover
-                }
-            }
-            SetStatus(st_);
+        if (show && needResolve) {   // look it up on the cover thread; the result comes back in TakeCoverResult
+            std::lock_guard<std::mutex> lk(mu_);
+            coverJob_.track = snap.track;
+            coverJob_.cfg = cfg;
+            coverJob_.id = snap.trackId;
+            coverJob_.verify = false;
+            coverJob_.serial = ++coverSerial_;
+            coverJobPending_ = true;
+            coverDone_ = false;
+            coverCv_.notify_one();
         }
     }
 

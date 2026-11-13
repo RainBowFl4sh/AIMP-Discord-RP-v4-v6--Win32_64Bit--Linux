@@ -75,6 +75,9 @@ public:
     void Stop();
 
     void Submit(const Snapshot& s);   // called from the AIMP main thread
+    // the track AIMP plays next (queue / playlist order): its cover is looked up / uploaded and checked while
+    // nothing else is to do, so Discord gets it at once when that track starts (main thread)
+    void Prefetch(const TrackInfo& next);
     void Refresh();                   // settings changed -> rebuild presence
     void ClearCoverCache();
     void SendTest();                  // show a test presence for 15 seconds
@@ -85,6 +88,17 @@ public:
 
 private:
     void Run();
+    // cover lookups / uploads run on their own thread, so a slow source never holds up Discord's updates
+    void RunCovers();
+    void TakeCoverResult();            // worker thread: a finished lookup for the current track
+
+    struct CoverJob {
+        TrackInfo track;
+        Config    cfg;
+        uint64_t  id = 0;               // track id (0 for the next track)
+        bool      verify = false;       // the next track: check its cached cover too
+        uint64_t  serial = 0;
+    };
     bool BuildActivity(const Config& c, const Snapshot& s, std::string& out);
     std::string TestActivity(const Config& c);
     void SetStatus(const PresenceStatus& st);
@@ -102,6 +116,18 @@ private:
     std::mutex     mu_;
     Snapshot       snap_;
     bool           dirty_ = false;
+    TrackInfo      prefetch_;             // next track whose cover is to be prepared
+    bool           prefetchPending_ = false;
+    // cover thread (jobs and results guarded by mu_)
+    std::thread    coverThread_;
+    std::condition_variable coverCv_;
+    bool           coverJobPending_ = false, coverBusy_ = false;
+    CoverJob       coverJob_;             // the current track's lookup (newest wins)
+    uint64_t       coverSerial_ = 0;      // of the newest job for the current track
+    bool           coverDone_ = false;    // a result for the current track is waiting
+    uint64_t       searchingFor_ = 0;     // worker thread: track whose lookup is running (0 = none)
+    uint64_t       coverDoneId_ = 0;
+    CoverResult    coverDoneResult_;
     PresenceStatus status_;
 
     // worker-thread only
@@ -122,8 +148,8 @@ private:
     bool          awaitShown_ = false;    // waiting for Discord's answer to a SET_ACTIVITY with a cover URL
     std::string   proxyCheck_;            // Discord's proxy URL of the cover, checked at proxyAt_
     std::chrono::steady_clock::time_point proxyAt_{};
-    uint64_t      noCoverTrack_ = 0;
-    uint64_t      repairTrack_ = 0;       // track the repair counters belong to      // track whose cover Discord cannot show (logo instead)
+    uint64_t      noCoverTrack_ = 0;      // track whose cover Discord cannot show (logo instead)
+    uint64_t      repairTrack_ = 0;       // track the repair counters belong to
     void          CheckShownCover(std::chrono::steady_clock::time_point now);
     uint64_t      lastConfigCheck_ = 0;
     unsigned      nextWaitMs_ = 1000;

@@ -16,6 +16,8 @@ struct CoverResult {
     std::string url;
     std::string source;   // "Deezer", "iTunes", ... or "embedded|catbox.moe" / "folder|x0.at" for uploaded local covers
     int64_t     stored = 0;   // unix time it was cached (uploaded covers are checked again when they are older)
+    std::string print;        // uploaded covers: fingerprint of the local picture ("" = unknown)
+    bool        cancelled = false;   // the lookup was stopped (web::SetCancel) before it could finish
 };
 
 class CoverResolver {
@@ -23,7 +25,9 @@ public:
     CoverResolver();
 
     CoverResult PeekCache(const TrackInfo& t);                       // fast, never touches the network
-    CoverResult Resolve(const TrackInfo& t, const Config& cfg);      // may block (network) - call from worker thread
+    // may block (network) - call from the worker thread; ends early while web::Cancelled() (result: cancelled).
+    // verify: a cached cover is checked once per session (still online, uploaded picture unchanged)
+    CoverResult Resolve(const TrackInfo& t, const Config& cfg, bool verify = false);
     void        ClearCache();
     void        Forget(const TrackInfo& t);                          // drop this track's cover (resolved again)
     static bool Reachable(const std::string& url);                   // the URL delivers a picture (first bytes)

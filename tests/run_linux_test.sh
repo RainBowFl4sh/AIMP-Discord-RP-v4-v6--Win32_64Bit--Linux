@@ -76,6 +76,30 @@ grep "^upload:" "$TMP/opus.out"
 grep -q "^upload: Source: from the file's tags, uploaded to catbox.moe (AIMP's tag readers asked 1 time" "$TMP/opus.out" \
     || { echo "FAILED: the cover AIMP read from the Opus file was not uploaded"; exit 1; }
 
+# 1.6.5: the cover of the track AIMP plays next is prepared in advance (upload of its folder image) and shown at
+# once; Deezer hits by another artist are refused, other case (Cyrillic) is fine, a hanging source holds up nothing
+mkdir -p "$TMP/music/Innuendo"
+python3 -c "import sys; sys.path.insert(0, '$HERE'); import fake_web; open(sys.argv[1], 'wb').write(fake_web.png((10, 120, 200)))" "$TMP/music/Innuendo/cover.png"
+: > "$TMP/music/Innuendo/01.flac"
+printf '[DiscordRPC]\nConfigVersion=10\nCoverEnabled=1\nCoverPreferLocal=1\nCoverFolder=1\nUploadHost=1\nCoverDeezer=1\nCoverItunes=0\nCoverBandcamp=0\nCoverMusicBrainz=0\nDetails=%%title%%\nUpdateCheck=0\n' \
+    > "$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini"
+rm -rf "$XDG_CONFIG_HOME/AIMP/DiscordRPC" "$XDG_CONFIG_HOME/AIMP/DiscordRPC_covers.tsv"
+before=$(wc -l < "$TMP/frames.log"); : > "$TMP/web.log"
+AIMP_DISCORD_RPC_DEBUG=1 AIMP_TEST_PREFETCH=1 AIMP_TEST_NEXT_FILE="$TMP/music/Innuendo/01.flac" "$BUILD/host_test" "$BUILD/aimp_discord_rpc.so" > "$TMP/prefetch.out" 2>&1 \
+    || { cat "$TMP/prefetch.out"; exit 1; }
+tail -n +$((before + 1)) "$TMP/frames.log" > "$TMP/prefetch.frames"
+python3 "$HERE/check_prefetch.py" "$TMP/prefetch.frames" "$TMP/web.log" || { grep -a "AIMP DiscordRPC" "$TMP/prefetch.out" | tail -30; exit 1; }
+# the cached cover of the next track is checked once per session: unchanged -> kept, folder image changed -> new upload
+: > "$TMP/web.log"
+AIMP_DISCORD_RPC_DEBUG=1 AIMP_TEST_PREFETCH=2 AIMP_TEST_NEXT_FILE="$TMP/music/Innuendo/01.flac" "$BUILD/host_test" "$BUILD/aimp_discord_rpc.so" > "$TMP/prefetch2.out" 2>&1
+! grep -q "/catbox.moe/user/api.php" "$TMP/web.log" && grep -q "files.catbox.moe" "$TMP/web.log" \
+    || { echo "FAILED: unchanged cached cover of the next track not checked / uploaded again"; cat "$TMP/web.log"; exit 1; }
+python3 -c "import sys; sys.path.insert(0, '$HERE'); import fake_web; open(sys.argv[1], 'wb').write(fake_web.png((200, 30, 30)))" "$TMP/music/Innuendo/cover.png"
+AIMP_DISCORD_RPC_DEBUG=1 AIMP_TEST_PREFETCH=2 AIMP_TEST_NEXT_FILE="$TMP/music/Innuendo/01.flac" "$BUILD/host_test" "$BUILD/aimp_discord_rpc.so" > "$TMP/prefetch3.out" 2>&1
+grep -q "cover of this album changed" "$TMP/prefetch3.out" && grep -q "/catbox.moe/user/api.php" "$TMP/web.log" \
+    || { echo "FAILED: changed folder image of the next track not uploaded again"; grep -a "AIMP DiscordRPC" "$TMP/prefetch3.out" | tail; exit 1; }
+echo "prefetch: unchanged cover kept, changed cover uploaded again"
+
 # texts with variants ("a || b") switch every RotateSeconds; own name instead of "AIMP"; title changes; tag reads
 printf '[DiscordRPC]\nConfigVersion=7\nCoverEnabled=0\nDetails=%%artist%% || %%title%%\nState=%%title%%\nActivityName=%%album%%\nRotateSeconds=5\nUpdateCheck=0\n' > "$XDG_CONFIG_HOME/AIMP/DiscordRPC.ini"
 before=$(wc -l < "$TMP/frames.log")

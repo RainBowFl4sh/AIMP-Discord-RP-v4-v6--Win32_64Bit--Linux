@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.6.5
+
+### New
+- **The next track's cover is ready in advance**: while a track plays, the plugin already looks up (or uploads) the
+  cover of the track AIMP plays next - from AIMP's queue, otherwise the playlist order (shuffle included). When that
+  track starts, Discord gets its cover with the very first update instead of a few seconds later. A cover that is
+  cached already is checked once per session: the link must still work, and an uploaded cover is uploaded again
+  when the picture in the file / folder changed. Can be switched off on the "Cover art" tab
+
+### Fixed
+- **Wrong covers from Deezer**: Deezer's hit is now only used when it is by the same artist (the other sources
+  checked that already). Deezer's free search sometimes found an album of somebody else
+- **Artists with umlauts or in Cyrillic / Greek**: upper and lower case now match for these letters too
+  ("ЛЕНИНГРАД" = "Ленинград", "MÖTLEY CRÜE" = "Mötley Crüe"). Online covers of such artists were refused when
+  the service wrote the name differently, and the filters and automatic presets ("contains" / "equals") only matched
+  the exact spelling
+- **A slow cover source no longer holds up Discord**: a new track or play / pause is shown at once, a cover search
+  still running is stopped (and started again for the track playing then)
+- **MusicBrainz**: a backslash in an artist or album name no longer breaks the search
+
 ## 1.6.4
 
 ### Fixed

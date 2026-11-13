@@ -79,6 +79,7 @@ struct Config {
     std::wstring coverNames    = L"cover;folder;front;album;albumart";
     int          uploadHost    = 3;              // local cover upload: 0 = off, 1 = catbox.moe, 2 = Imgur, 3 = x0.at
     bool         preferLocal   = true;           // local cover first, online lookup only if none found
+    bool         coverPrefetch = true;           // prepare the cover of the track AIMP plays next
     std::wstring imgurClientId;
     // online lookup (public URLs, nothing is uploaded)
     bool         srcSpotify     = false;         // needs Client ID + Secret

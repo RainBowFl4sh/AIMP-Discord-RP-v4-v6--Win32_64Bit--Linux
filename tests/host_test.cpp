@@ -540,8 +540,37 @@ public:
     }
 };
 
+// AIMP's playback queue: names the track played next (queue / playlist order); next == nullptr: none
+class QueueItem : public Props<IAIMPPlaybackQueueItem> {
+public:
+    HRESULT __unknwncall QueryInterface(REFIID riid, LPVOID* ppv) override {
+        if (Same(riid, IID_IAIMPPlaybackQueueItem)) { *ppv = static_cast<IAIMPPlaybackQueueItem*>(this); AddRef(); return S_OK; }
+        return Props<IAIMPPlaybackQueueItem>::QueryInterface(riid, ppv);
+    }
+};
+
+class PlaybackQueue : public Obj<IAIMPServicePlaybackQueue> {
+public:
+    IAIMPPlaylistItem* next = nullptr;   // not owned
+    int asked = 0;
+    HRESULT __unknwncall QueryInterface(REFIID riid, LPVOID* ppv) override {
+        if (Same(riid, IID_IAIMPServicePlaybackQueue)) { *ppv = static_cast<IAIMPServicePlaybackQueue*>(this); AddRef(); return S_OK; }
+        return Obj<IAIMPServicePlaybackQueue>::QueryInterface(riid, ppv);
+    }
+    HRESULT WINAPI GetNextTrack(IAIMPPlaybackQueueItem** item) override {
+        ++asked;
+        if (!item || !next) return E_FAIL;
+        QueueItem* q = new QueueItem();
+        q->objects[AIMP_PLAYBACKQUEUEITEM_PROPID_PLAYLISTITEM] = next;
+        *item = q;
+        return S_OK;
+    }
+    HRESULT WINAPI GetPrevTrack(IAIMPPlaybackQueueItem**) override { return E_NOTIMPL; }
+};
+
 class Core : public Obj<IAIMPCore> {
 public:
+    PlaybackQueue* queue = new PlaybackQueue();
     Player* player = new Player();
     Dispatcher* dispatcher = new Dispatcher();
     Threads* threads = new Threads();
@@ -564,6 +593,7 @@ public:
         if (Same(riid, IID_IAIMPServiceUI)) { *ppv = static_cast<IAIMPServiceUI*>(&ui); return S_OK; }
         if (Same(riid, IID_IAIMPServiceFileInfoFormatter)) { formatter->AddRef(); *ppv = formatter; return S_OK; }
         if (Same(riid, IID_IAIMPServiceFileInfo)) { fileInfo->AddRef(); *ppv = fileInfo; return S_OK; }
+        if (Same(riid, IID_IAIMPServicePlaybackQueue)) { queue->AddRef(); *ppv = queue; return S_OK; }
         if (Same(riid, IID_IAIMPServiceOptionsDialog)) { *ppv = static_cast<IAIMPServiceOptionsDialog*>(&options); return S_OK; }
         return Obj<IAIMPCore>::QueryInterface(riid, ppv);
     }
@@ -1493,8 +1523,80 @@ int TestTemplateSets(Core* core) {
     return -1;
 }
 
+// A track as AIMP's playlist has it (file info + playlist item), for the playback queue / track changes
+struct TestTrack {
+    FileInfo* info = new FileInfo();
+    PlaylistItem* item = new PlaylistItem();
+    TestTrack(const char* artist, const char* title, const char* album, const Str& file) {
+        info->text[AIMP_FILEINFO_PROPID_ARTIST] = S(artist);
+        info->text[AIMP_FILEINFO_PROPID_TITLE] = S(title);
+        info->text[AIMP_FILEINFO_PROPID_ALBUM] = S(album);
+        info->text[AIMP_FILEINFO_PROPID_FILENAME] = file;
+        info->duration = 200;
+        item->text[AIMP_PLAYLISTITEM_PROPID_FILENAME] = file;
+        item->objects[AIMP_PLAYLISTITEM_PROPID_FILEINFO] = static_cast<IAIMPFileInfo*>(info);
+    }
+};
+
+// AIMP starts the track (like the next one in the playlist): new tags, position 0, AIMP's event
+void PlayTrack(Core* core, const TestTrack& t) {
+    for (int id : {AIMP_FILEINFO_PROPID_ARTIST, AIMP_FILEINFO_PROPID_TITLE, AIMP_FILEINFO_PROPID_ALBUM, AIMP_FILEINFO_PROPID_FILENAME})
+        core->player->info->text[id] = t.info->text[id];
+    core->player->item->text[AIMP_PLAYLISTITEM_PROPID_FILENAME] = t.item->text[AIMP_PLAYLISTITEM_PROPID_FILENAME];
+    core->player->pos = 0;
+    core->player->dur = 200;
+    core->dispatcher->Fire(AIMP_MSG_EVENT_STREAM_START);
+    printf("prefetch: now playing %s\n", Narrow(t.info->text[AIMP_FILEINFO_PROPID_TITLE]).c_str());
+}
+
+// AIMP_TEST_PREFETCH: the cover of the track AIMP plays next is prepared while the current one plays (1.6.5).
+// AIMP_TEST_NEXT_FILE: that track's file (its folder has a cover.png for the upload).
+//   =1: the next track's cover is uploaded in advance and shown at once; then Deezer's hit by another artist is
+//       refused, a name in other case (Cyrillic) is accepted, and a hanging cover search does not hold up the next track
+//   =2: only the preparation (the cached cover is checked: uploaded again when the folder image changed)
+int RunPrefetch(Core* core, int mode) {
+    const Str nextFile = FromUtf8(Env("AIMP_TEST_NEXT_FILE").c_str());
+    static TestTrack innuendo("Queen", "Innuendo", "Innuendo", nextFile);
+#ifdef _WIN32
+    static TestTrack odd("Unknown Band", "Odd Song", "Nothing Like It", L"C:\\Music\\x\\02.flac");
+    static TestTrack leningrad("\xD0\x9B\xD0\x95\xD0\x9D\xD0\x98\xD0\x9D\xD0\x93\xD0\xA0\xD0\x90\xD0\x94", "Exponat",
+                               "\xD0\x91\xD0\xB0\xD0\xB1\xD1\x8C\xD0\xB5 \xD0\xBB\xD0\xB5\xD1\x82\xD0\xBE", L"C:\\Music\\y\\03.flac");
+    static TestTrack slow("Slow Band", "Waiting", "Forever", L"C:\\Music\\z\\04.flac");
+    static TestTrack queen("Queen", "Bohemian Rhapsody", "A Night at the Opera", L"C:\\Music\\Queen\\01.flac");
+#else
+    static TestTrack odd("Unknown Band", "Odd Song", "Nothing Like It", "/music/x/02.flac");
+    static TestTrack leningrad("\xD0\x9B\xD0\x95\xD0\x9D\xD0\x98\xD0\x9D\xD0\x93\xD0\xA0\xD0\x90\xD0\x94", "Exponat",
+                               "\xD0\x91\xD0\xB0\xD0\xB1\xD1\x8C\xD0\xB5 \xD0\xBB\xD0\xB5\xD1\x82\xD0\xBE", "/music/y/03.flac");
+    static TestTrack slow("Slow Band", "Waiting", "Forever", "/music/z/04.flac");
+    static TestTrack queen("Queen", "Bohemian Rhapsody", "A Night at the Opera", "/music/Queen/01.flac");
+#endif
+    core->queue->next = innuendo.item;
+    core->player->state = 2;
+    core->player->pos = 30;
+    core->player->dur = 354;
+    core->dispatcher->Fire(AIMP_MSG_EVENT_PLAYER_STATE);
+    Tick(core, 8);   // the current cover (Deezer), then the next one (folder image -> catbox.moe)
+    printf("prefetch: playback queue asked %d time(s)\n", core->queue->asked);
+    if (mode == 2) return -1;
+
+    core->queue->next = odd.item;   // AIMP now names the track after Innuendo
+    PlayTrack(core, innuendo);
+    Tick(core, 6);
+    core->queue->next = nullptr;
+    PlayTrack(core, odd);           // its cover search found an album of somebody else: none
+    Tick(core, 4);
+    PlayTrack(core, leningrad);     // Deezer writes the artist in lower case: still the right cover
+    Tick(core, 5);
+    PlayTrack(core, slow);          // a source that hangs (25 s) ...
+    Tick(core, 3);
+    PlayTrack(core, queen);         // ... does not hold up the next track
+    Tick(core, 5);
+    return -1;
+}
+
 int RunTests(Core* core) {
     const bool uiOnly = Env("AIMP_TEST_UI_ONLY") == "1";
+    if (!Env("AIMP_TEST_PREFETCH").empty()) return RunPrefetch(core, atoi(Env("AIMP_TEST_PREFETCH").c_str()));
     const bool upload = Env("AIMP_TEST_UPLOAD") == "1";   // the track's folder image goes to (fake) catbox.moe
     if (Env("AIMP_TEST_ROTATE") == "1") {   // texts with variants: Discord gets them one after the other
         core->player->state = 2;

@@ -17,9 +17,10 @@ std::mutex g_fileMu;    // file access + g_stamp; serializes writers
 uint64_t   g_stamp = 0;
 
 const wchar_t* const kSection = L"DiscordRPC";
-const int kConfigVersion = 10;  // 5 = 1.5.0 (one INI format for both platforms, UTF-16 on Windows), 6 = 1.5.3 (x0.at),
+const int kConfigVersion = 11;  // 5 = 1.5.0 (one INI format for both platforms, UTF-16 on Windows), 6 = 1.5.3 (x0.at),
                                 // 7 = 1.5.4 (RotateSeconds), 8 = AdvancedPlaceholders, 9 = 1.6.0 (texts for pause /
-                                // streams, presets, buttons), 10 = 1.6.1 (%samplerate% / %bitdepth% with their unit)
+                                // streams, presets, buttons), 10 = 1.6.1 (%samplerate% / %bitdepth% with their unit),
+                                // 11 = 1.6.5 (CoverPrefetch)
 
 const wchar_t* const kFieldKeys[4] = {L"Details", L"State", L"LargeText", L"SmallText"};
 const wchar_t* const kSetKeys[3] = {L"", L"Paused", L"Stream"};
@@ -137,6 +138,7 @@ void VisitSettings(C& c, V& v) {
     v.Int(L"UploadHost", c.uploadHost);
     v.Str(L"ImgurClientId", c.imgurClientId);
     v.Bool(L"CoverPreferLocal", c.preferLocal);
+    v.Bool(L"CoverPrefetch", c.coverPrefetch);   // the next track's cover is looked up / uploaded in advance
     v.Bool(L"CoverSpotify", c.srcSpotify);
     v.Str(L"SpotifyClientId", c.spotifyId);
     v.Str(L"SpotifyClientSecret", c.spotifySecret);

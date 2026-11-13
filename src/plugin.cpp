@@ -243,7 +243,7 @@ private:
     double ReadRate();
     int ReadState();
     bool ReadTrack(TrackInfo& t, double& duration);
-    std::wstring ReadNext();   // the track AIMP plays next, "" = none / unknown
+    bool ReadNext(TrackInfo& next);   // the track AIMP plays next (tags of its playlist item), false = none / unknown
     std::shared_ptr<const std::vector<uint8_t>> ReadArt(const std::wstring& fileName);
     void ReadExtra(IAIMPFileInfo* info, IAIMPPlaylistItem* item, TrackInfo& t);
     std::wstring FormatMacro(IAIMPFileInfo* info, const wchar_t* macro);
@@ -278,6 +278,11 @@ private:
     TrackInfo lastTrack_;
     double lastInfoDur_ = 0;
     bool trackDirty_ = true;
+    // the track AIMP plays next: its cover is prepared in advance (a few times per track at most - in shuffle mode
+    // AIMP may name another one now and then)
+    TrackInfo nextTrack_;
+    uint64_t nextId_ = 0;        // the one handed to the worker last
+    int nextHandOvers_ = 0;      // for the current track
     std::chrono::steady_clock::time_point lastTrackRead_{};
 };
 
@@ -673,6 +678,7 @@ LRESULT CALLBACK Plugin::TimerWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_TIMER) {
         Plugin* self = reinterpret_cast<Plugin*>(GetWindowLongPtrW(h, GWLP_USERDATA));
         if (self) self->Poll();
+        web::CheckCancels();   // a cover search that is no longer wanted ends (WinHTTP cannot check that itself)
         return 0;
     }
     return DefWindowProcW(h, m, w, l);
@@ -750,7 +756,12 @@ bool Plugin::ReadTrack(TrackInfo& t, double& duration) {
         if (config::Get().advancedTemplates) ReadExtra(info.get(), item.get(), t);
     }
     if (t.title.empty()) t.title = util::FileNameNoExt(t.fileName);   // untagged files / streams
-    if (UsesPlaceholder(config::Get(), L"next")) t.next = ReadNext();
+    const Config c = config::Get();
+    nextTrack_ = TrackInfo();
+    const bool prefetch = c.enabled && c.coverEnabled && c.coverPrefetch;
+    if ((prefetch || UsesPlaceholder(c, L"next")) && ReadNext(nextTrack_) && UsesPlaceholder(c, L"next"))
+        t.next = nextTrack_.artist.empty() ? nextTrack_.title : nextTrack_.artist + L" - " + nextTrack_.title;
+    if (!prefetch) nextTrack_ = TrackInfo();
     return true;
 }
 
@@ -781,24 +792,28 @@ std::shared_ptr<const std::vector<uint8_t>> Plugin::ReadArt(const std::wstring& 
 }
 
 // AIMP's playback queue knows the next track (queue, shuffle and playlist order included), also in
-// AIMP 3.60. Without the service %next% stays empty.
-std::wstring Plugin::ReadNext() {
+// AIMP 3.60. Without the service %next% stays empty and nothing is prepared.
+bool Plugin::ReadNext(TrackInfo& next) {
     ComPtr<IAIMPServicePlaybackQueue> queue;
-    ComPtr<IAIMPPlaybackQueueItem> next;
+    ComPtr<IAIMPPlaybackQueueItem> qi;
     ComPtr<IAIMPPlaylistItem> item;
     if (FAILED(core_->QueryInterface(IID_IAIMPServicePlaybackQueue, queue.putVoid())) || !queue ||
-        FAILED(queue->GetNextTrack(next.put())) || !next ||
-        FAILED(next->GetValueAsObject(AIMP_PLAYBACKQUEUEITEM_PROPID_PLAYLISTITEM, IID_IAIMPPlaylistItem, item.putVoid())) ||
+        FAILED(queue->GetNextTrack(qi.put())) || !qi ||
+        FAILED(qi->GetValueAsObject(AIMP_PLAYBACKQUEUEITEM_PROPID_PLAYLISTITEM, IID_IAIMPPlaylistItem, item.putVoid())) ||
         !item)
-        return std::wstring();
-    std::wstring artist, title;
+        return false;
+    next.fileName = PropString(item.get(), AIMP_PLAYLISTITEM_PROPID_FILENAME);
     ComPtr<IAIMPFileInfo> info;
     if (SUCCEEDED(item->GetValueAsObject(AIMP_PLAYLISTITEM_PROPID_FILEINFO, IID_IAIMPFileInfo, info.putVoid())) && info) {
-        artist = util::Trim(PropString(info.get(), AIMP_FILEINFO_PROPID_ARTIST));
-        title = util::Trim(PropString(info.get(), AIMP_FILEINFO_PROPID_TITLE));
+        next.artist      = util::Trim(PropString(info.get(), AIMP_FILEINFO_PROPID_ARTIST));
+        next.albumArtist = util::Trim(PropString(info.get(), AIMP_FILEINFO_PROPID_ALBUMARTIST));
+        next.title       = util::Trim(PropString(info.get(), AIMP_FILEINFO_PROPID_TITLE));
+        next.album       = util::Trim(PropString(info.get(), AIMP_FILEINFO_PROPID_ALBUM));
+        next.genre       = PropString(info.get(), AIMP_FILEINFO_PROPID_GENRE);
+        if (next.fileName.empty()) next.fileName = PropString(info.get(), AIMP_FILEINFO_PROPID_FILENAME);
     }
-    if (title.empty()) title = util::FileNameNoExt(PropString(item.get(), AIMP_PLAYLISTITEM_PROPID_FILENAME));
-    return artist.empty() ? title : artist + L" - " + title;
+    if (next.title.empty()) next.title = util::FileNameNoExt(next.fileName);
+    return !next.title.empty() || !next.fileName.empty();
 }
 
 // AIMP's own formatter for one macro ("%PlayCount"): AIMP knows values that are no tag (statistics)
@@ -914,12 +929,26 @@ void Plugin::Poll() {
             if (id != lastId_) {                            // new track
                 push = true;
                 t.art = ReadArt(t.fileName);
+                nextHandOvers_ = 0;
             } else {
                 t.art = lastTrack_.art;
                 if (t.extra != lastTrack_.extra || t.next != lastTrack_.next) push = true;   // e.g. the play count went up
             }
             lastId_ = id;
             lastTrack_ = std::move(t);
+            // the next track (queue / playlist): its cover is prepared while this one plays
+            // (not for radio streams: their song is only known while they play)
+            if ((!nextTrack_.fileName.empty() || !nextTrack_.title.empty()) && !util::IsUrl(nextTrack_.fileName) &&
+                nextTrack_.fileName != lastTrack_.fileName) {
+                const uint64_t nid = util::Fnv1a(nextTrack_.fileName + L"|" + nextTrack_.artist + L"|" + nextTrack_.title +
+                                                 L"|" + nextTrack_.album);
+                if (nid != nextId_ && nextHandOvers_ < 3) {
+                    nextId_ = nid;
+                    ++nextHandOvers_;
+                    nextTrack_.art = ReadArt(nextTrack_.fileName);   // formats only AIMP can read the cover of
+                    Worker().Prefetch(nextTrack_);
+                }
+            }
         }
         if (dur <= 0) dur = lastInfoDur_;
         if (dur <= 0) dur = ReadReal(AIMP_MSG_PROPERTY_PLAYER_DURATION);

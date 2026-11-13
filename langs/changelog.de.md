@@ -1,5 +1,26 @@
 # Änderungen
 
+## 1.6.5
+
+### Neu
+- **Das Cover des nächsten Titels liegt schon bereit**: Während ein Titel läuft, sucht (oder lädt) das Plugin schon
+  das Cover des Titels, den AIMP als Nächstes spielt – aus AIMPs Warteschlange, sonst aus der Reihenfolge der
+  Playlist (auch bei Zufallswiedergabe). Startet dieser Titel, bekommt Discord das Cover gleich mit der ersten
+  Aktualisierung statt ein paar Sekunden später. Ein schon gespeichertes Cover wird einmal pro Sitzung geprüft: Der
+  Link muss noch funktionieren, und ein hochgeladenes Cover wird neu hochgeladen, wenn sich das Bild in der Datei
+  bzw. im Ordner geändert hat. Abschaltbar im Tab „Cover“
+
+### Behoben
+- **Falsche Cover von Deezer**: Deezers Treffer wird jetzt nur noch genommen, wenn er vom selben Künstler ist (die
+  anderen Quellen prüften das schon). Deezers freie Suche fand manchmal ein Album von jemand anderem
+- **Künstler mit Umlauten oder in Kyrillisch / Griechisch**: Groß- und Kleinschreibung passen jetzt auch bei diesen
+  Buchstaben zusammen („ЛЕНИНГРАД“ = „Ленинград“, „MÖTLEY CRÜE“ = „Mötley Crüe“). Online-Cover solcher Künstler
+  wurden verworfen, wenn der Dienst den Namen anders schrieb, und Filter sowie automatische Presets („enthält“ /
+  „ist gleich“) griffen nur bei exakt gleicher Schreibweise
+- **Eine langsame Cover-Quelle hält Discord nicht mehr auf**: Ein neuer Titel oder Wiedergabe / Pause wird sofort
+  angezeigt, eine noch laufende Cover-Suche wird abgebrochen (und für den dann laufenden Titel neu gestartet)
+- **MusicBrainz**: Ein Backslash im Namen von Künstler oder Album bringt die Suche nicht mehr durcheinander
+
 ## 1.6.4
 
 ### Behoben

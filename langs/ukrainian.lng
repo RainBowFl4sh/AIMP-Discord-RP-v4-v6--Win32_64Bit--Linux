@@ -104,6 +104,7 @@ Cov.UploadX0=x0.at (анонімно)
 Cov.ImgurId=Imgur Client-ID:
 Cov.GetImgurId=Отримати
 Cov.PreferLocal=Спершу обкладинка з самого файлу
+Cov.Prefetch=Готувати обкладинку наступного треку
 Cov.PublicNote=Завантажені обкладинки бачить кожен, хто має посилання.
 Cov.ClearCache=Очистити кеш
 Cov.Cleared=Кеш обкладинок очищено.

@@ -21,6 +21,8 @@ namespace web {
 namespace {
 
 std::atomic<bool> g_abort{false};
+// see CancelScope; a plain pointer: thread_local objects with destructors are risky in a DLL that is unloaded
+thread_local const std::function<bool()>* t_stop = nullptr;
 const char* const kAgent = "AIMP-DiscordRPC/" AIMP_DISCORD_RPC_VERSION " (+https://github.com/" AIMP_DISCORD_RPC_REPO ")";
 
 // Tests: AIMP_DISCORD_RPC_TEST_URL=http://127.0.0.1:port sends every request to a local server
@@ -34,24 +36,34 @@ std::wstring Target(const std::wstring& url) {
 
 }  // namespace
 
+CancelScope::CancelScope(std::function<bool()> stop) : stop_(std::move(stop)), previous_(t_stop) { t_stop = &stop_; }
+CancelScope::~CancelScope() { t_stop = previous_; }
+bool Cancelled() { return t_stop && *t_stop && (*t_stop)(); }
+
 #ifdef _WIN32
 
 namespace {
 
 std::mutex g_mu;
-std::vector<HINTERNET*> g_open;   // request handles of running requests (closed by Abort)
+struct Open {
+    HINTERNET* h;
+    const std::function<bool()>* stop;   // the requesting thread's CancelScope (nullptr = none)
+};
+std::vector<Open> g_open;   // request handles of running requests (closed by Abort / CheckCancels)
 
 struct Handle {
     HINTERNET h = nullptr;
     bool tracked = false;
     void Track() {
         std::lock_guard<std::mutex> lk(g_mu);
-        g_open.push_back(&h);
+        g_open.push_back({&h, t_stop});
         tracked = true;
     }
     ~Handle() {
         std::lock_guard<std::mutex> lk(g_mu);
-        if (tracked) g_open.erase(std::remove(g_open.begin(), g_open.end(), &h), g_open.end());
+        if (tracked)
+            g_open.erase(std::remove_if(g_open.begin(), g_open.end(), [this](const Open& o) { return o.h == &h; }),
+                         g_open.end());
         if (h) WinHttpCloseHandle(h);
     }
 };
@@ -61,16 +73,25 @@ struct Handle {
 void Abort() {
     g_abort = true;
     std::lock_guard<std::mutex> lk(g_mu);
-    for (HINTERNET* h : g_open) {   // closing the handle makes the blocked WinHTTP call return at once
-        if (*h) WinHttpCloseHandle(*h);
-        *h = nullptr;
+    for (const Open& o : g_open) {   // closing the handle makes the blocked WinHTTP call return at once
+        if (*o.h) WinHttpCloseHandle(*o.h);
+        *o.h = nullptr;
     }
+}
+
+void CheckCancels() {   // WinHTTP has no progress callback: a blocked request whose thread no longer wants it ends here
+    std::lock_guard<std::mutex> lk(g_mu);
+    for (const Open& o : g_open)
+        if (*o.h && o.stop && *o.stop && (*o.stop)()) {
+            WinHttpCloseHandle(*o.h);
+            *o.h = nullptr;
+        }
 }
 
 Response Request(const std::wstring& method, const std::wstring& urlIn, const std::vector<std::wstring>& headers,
                  const std::string& body, size_t maxBytes) {
     Response r;
-    if (g_abort) return r;
+    if (g_abort || Cancelled()) return r;
     const std::wstring url = Target(urlIn);
 
     URL_COMPONENTS uc = {};
@@ -125,7 +146,7 @@ Response Request(const std::wstring& method, const std::wstring& urlIn, const st
         DWORD avail = 0, got = 0;
         if (!WinHttpQueryDataAvailable(req.h, &avail)) return r;   // aborted / connection lost
         if (avail == 0) break;
-        if (r.body.size() + avail > maxBytes) return Response();   // too big
+        if (r.body.size() + avail > maxBytes || Cancelled()) return Response();   // too big / no longer wanted
         size_t old = r.body.size();
         r.body.resize(old + avail);
         if (!WinHttpReadData(req.h, &r.body[old], avail, &got)) return Response();
@@ -199,17 +220,19 @@ size_t OnHeader(char* p, size_t size, size_t n, void* user) {
     return size * n;
 }
 
-int OnProgress(void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t) { return g_abort ? 1 : 0; }   // 1 = abort
+// 1 = abort (runs on the requesting thread, so its CancelScope applies)
+int OnProgress(void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t) { return g_abort || Cancelled() ? 1 : 0; }
 
 }  // namespace
 
 void Abort() { g_abort = true; }   // curl checks it in OnProgress (at least once per second)
+void CheckCancels() {}            // curl checks the CancelScope in OnProgress itself
 
 Response Request(const std::wstring& method, const std::wstring& urlIn, const std::vector<std::wstring>& headers,
                  const std::string& body, size_t maxBytes) {
     Response r;
     const CurlApi& api = Curl();
-    if (!api.ok || g_abort) return r;
+    if (!api.ok || g_abort || Cancelled()) return r;
     CURL* c = api.easy_init();
     if (!c) return r;
 

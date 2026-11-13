@@ -109,6 +109,7 @@ Cov.UploadX0=x0.at (no account)
 Cov.ImgurId=Imgur Client-ID:
 Cov.GetImgurId=Get ID
 Cov.PreferLocal=Prefer the file's own cover
+Cov.Prefetch=Prepare the next track's cover
 Cov.PublicNote=Uploaded covers can be seen by anyone who has the link.
 Cov.ClearCache=Clear cover cache
 Cov.Cleared=Cover cache cleared.

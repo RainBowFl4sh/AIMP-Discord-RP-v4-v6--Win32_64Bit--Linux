@@ -28,8 +28,10 @@ import socket
 import struct
 import subprocess
 import sys
+import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 import zlib
@@ -141,9 +143,30 @@ FEED = f"""<?xml version="1.0" encoding="UTF-8"?>
 """.encode()
 ASSETS = [{"id": "1111", "type": 1, "name": "aimp"}, {"id": "2222", "type": 1, "name": "play"},
           {"id": "3333", "type": 1, "name": "pause"}, {"id": "4444", "type": 1, "name": "other"}]
-DEEZER = {"data": [{"id": 1, "title": "A Night at the Opera",
+DEEZER = {"data": [{"id": 1, "title": "A Night at the Opera", "artist": {"id": 412, "name": "Queen"},
                     "cover_xl": "https://e-cdns-images.dzcdn.net/images/cover/abc/1000x1000-000000-80-0-0.jpg"}],
           "total": 1}
+
+
+def deezer(path):
+    """Deezer's search: the hit is by the artist asked for (written as Deezer has it), its cover is named after the
+    album / title. "Unknown Band": Deezer finds an album of somebody else. "Slow Band": answers after 25 s."""
+    q = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query).get("q", [""])[0]
+    fields = dict(re.findall(r'(\w+):"([^"]*)"', q))
+    artist = fields.get("artist", q.split(" ")[0])
+    what = fields.get("album") or fields.get("track") or q
+    if "Slow Band" in q:
+        time.sleep(25)
+    if "Unknown Band" in q:
+        artist = "Completely Different"
+    elif artist == "ЛЕНИНГРАД":
+        artist = "Ленинград"   # Deezer writes the name in another case
+    if "A Night at the Opera" in q:   # the cover the other tests expect
+        return DEEZER
+    slug = hashlib.md5(what.encode()).hexdigest()[:12]
+    return {"data": [{"id": 2, "title": what, "artist": {"id": 3, "name": artist},
+                      "cover_xl": f"https://e-cdns-images.dzcdn.net/images/cover/{slug}/1000x1000-000000-80-0-0.jpg"}],
+            "total": 1}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -183,7 +206,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/cdn.discordapp.com/avatars/"):
             return self.reply(200, png((120, 80, 200)), "image/png")
         if path.startswith("/api.deezer.com/search/"):
-            return self.reply(200, DEEZER)
+            return self.reply(200, deezer(self.path))
         if path.startswith("/media.discordapp.net/external/"):   # Discord's media proxy
             if os.path.exists(self.server.log + ".proxy-broken") and "r=" not in self.path:
                 return self.reply(415, b"", "text/plain")   # Discord could not load this URL

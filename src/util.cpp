@@ -92,9 +92,29 @@ std::wstring Trim(const std::wstring& s) {
     return s.substr(a, b - a);
 }
 
+// Lower case for the scripts AIMP users write their tags in. towlower() alone only knows A-Z in the "C" locale
+// that a plugin usually runs in, so "ЛЕНИНГРАД" / "MÖTLEY CRÜE" stayed upper case (filters, rules, cover lookups).
+wchar_t LowerChar(wchar_t c) {
+    const unsigned u = (unsigned)c;
+    if (u < 0x80) return (u >= 'A' && u <= 'Z') ? (wchar_t)(u + 32) : c;
+    if ((u >= 0xC0 && u <= 0xDE && u != 0xD7) ||                     // Latin-1: À..Þ
+        (u >= 0x391 && u <= 0x3AB && u != 0x3A2) ||                   // Greek: Α..Ϋ
+        (u >= 0x410 && u <= 0x42F))                                   // Cyrillic: А..Я
+        return (wchar_t)(u + 0x20);
+    if (u >= 0x400 && u <= 0x40F) return (wchar_t)(u + 0x50);         // Cyrillic: Ѐ..Џ (Є І Ї Ў ...)
+    if (u == 0x178) return (wchar_t)0xFF;                             // Ÿ
+    if (u == 0x130) return L'i';                                      // İ
+    if ((u >= 0x100 && u <= 0x12F) || (u >= 0x132 && u <= 0x137) || (u >= 0x14A && u <= 0x177) ||   // Latin Ext.-A
+        (u >= 0x460 && u <= 0x481) || (u >= 0x48A && u <= 0x4BF) || (u >= 0x4D0 && u <= 0x52F))      // Cyrillic (Ґ ...)
+        return (u & 1) ? c : (wchar_t)(u + 1);
+    if ((u >= 0x139 && u <= 0x148) || (u >= 0x179 && u <= 0x17E) || (u >= 0x4C1 && u <= 0x4CE))
+        return (u & 1) ? (wchar_t)(u + 1) : c;
+    return (wchar_t)towlower(c);   // anything else: whatever the C library knows
+}
+
 std::wstring Lower(const std::wstring& s) {
     std::wstring r = s;
-    std::transform(r.begin(), r.end(), r.begin(), [](wchar_t c) { return (wchar_t)towlower(c); });
+    std::transform(r.begin(), r.end(), r.begin(), LowerChar);
     return r;
 }
 

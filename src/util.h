@@ -24,7 +24,8 @@ std::string  ToUtf8(const std::wstring& w);
 std::wstring FromUtf8(const std::string& s);
 
 std::wstring Trim(const std::wstring& s);
-std::wstring Lower(const std::wstring& s);
+std::wstring Lower(const std::wstring& s);   // also Ä Ö Ü, Cyrillic, Greek (not only A-Z)
+wchar_t LowerChar(wchar_t c);
 std::vector<std::wstring> Split(const std::wstring& s, wchar_t sep);
 std::wstring ReplaceAll(std::wstring s, const std::wstring& from, const std::wstring& to);
 bool ContainsNoCase(const std::wstring& haystack, const std::wstring& needle);

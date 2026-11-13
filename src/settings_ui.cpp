@@ -44,7 +44,7 @@ enum Ids {
     IDC_TPLCHIPS = 3100, IDC_DISPCHIPS = 3200,
     // Cover art
     IDC_COVER = 400, IDC_EMBEDDED, IDC_FOLDER, IDC_FOLDERNAMES, IDC_UPLOADHOST, IDC_IMGURID, IDC_PREFERLOCAL,
-    IDC_CLEARCACHE, IDC_CACHEINFO, IDC_COVERIMG, IDC_COVERINFO, IDC_COVERLINK,
+    IDC_CLEARCACHE, IDC_CACHEINFO, IDC_COVERIMG, IDC_COVERINFO, IDC_COVERLINK, IDC_PREFETCH,
     // Online sources
     IDC_SPOTIFY = 600, IDC_SPOTIFYID, IDC_SPOTIFYSECRET, IDC_DEEZER, IDC_ITUNES, IDC_BANDCAMP, IDC_DISCOGS,
     IDC_DISCOGSTOKEN, IDC_MUSICBRAINZ,
@@ -925,7 +925,8 @@ void SettingsPage::BuildCover(IAIMPUIWinControl* p) {
     Label(p, "Cov.ImgurId", 28, y + 3, 112);     Edit(p, IDC_IMGURID, 145, y, 100);
     Link(p, "Cov.GetImgurId", L"https://api.imgur.com/oauth2/addclient", 252, y + 3, 73);   y += 30;
     Check(p, IDC_PREFERLOCAL, "Cov.PreferLocal", 10, y, 315);                                y += 24;
-    Label(p, "Cov.PublicNote", 10, y, 315, 34);
+    Label(p, "Cov.PublicNote", 10, y, 315, 34);                                            y += 38;
+    Check(p, IDC_PREFETCH, "Cov.Prefetch", 10, y, 315);   // the next track's cover is ready when it starts
 
     Label(p, "Cov.Current", 335, top, 130, 32);
     Image(p, IDC_COVERIMG, 340, top + 34, 120, 120);
@@ -1242,6 +1243,7 @@ void SettingsPage::Load(const Config* from) {
     SetSel(IDC_UPLOADHOST, c.uploadHost);
     SetText(IDC_IMGURID, c.imgurClientId);
     SetCheck(IDC_PREFERLOCAL, c.preferLocal);
+    SetCheck(IDC_PREFETCH, c.coverPrefetch);
     SetCheck(IDC_SPOTIFY, c.srcSpotify);
     SetText(IDC_SPOTIFYID, c.spotifyId);
     SetText(IDC_SPOTIFYSECRET, c.spotifySecret);
@@ -1316,6 +1318,7 @@ void SettingsPage::Collect(Config& c) const {
     c.uploadHost     = std::max(0, std::min(3, GetSel(IDC_UPLOADHOST)));
     c.imgurClientId  = util::Trim(GetText(IDC_IMGURID));
     c.preferLocal    = GetCheck(IDC_PREFERLOCAL);
+    c.coverPrefetch  = GetCheck(IDC_PREFETCH);
     c.srcSpotify     = GetCheck(IDC_SPOTIFY);
     c.spotifyId      = util::Trim(GetText(IDC_SPOTIFYID));
     c.spotifySecret  = util::Trim(GetText(IDC_SPOTIFYSECRET));

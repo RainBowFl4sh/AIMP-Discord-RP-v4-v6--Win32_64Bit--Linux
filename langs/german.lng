@@ -104,6 +104,7 @@ Cov.UploadX0=x0.at (ohne Konto)
 Cov.ImgurId=Imgur Client-ID:
 Cov.GetImgurId=ID holen
 Cov.PreferLocal=Eigenes Cover der Datei bevorzugen
+Cov.Prefetch=Cover des nächsten Titels vorbereiten
 Cov.PublicNote=Hochgeladene Cover kann jeder sehen, der den Link hat.
 Cov.ClearCache=Cover-Cache leeren
 Cov.Cleared=Cover-Cache geleert.
